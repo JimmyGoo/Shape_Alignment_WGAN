@@ -178,8 +178,6 @@ def main():
 	with tf.device(device_gpu):
 		opt_g, opt_d, real_cp = build_graph()
 
-	feed_dict = {real_cp: cp_batch}
-
 	merged_all = tf.summary.merge_all()
 	saver = tf.train.Saver()
 	config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
@@ -190,6 +188,8 @@ def main():
 	with tf.Session(config=config) as sess:
 		sess.run(tf.global_variables_initializer())
 		summary_writer = tf.summary.FileWriter(log_path, sess.graph)
+		feed_dict =  {real_cp: cp_batch.eval()}
+
 		for i in range(max_iter_step):
 			if i < 25 or i % 500 == 0:
 				citers = 100
