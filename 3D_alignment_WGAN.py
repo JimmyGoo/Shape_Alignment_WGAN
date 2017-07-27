@@ -15,14 +15,14 @@ os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
 xavier_init = cly.xavier_initializer()
 #input 10(pending) dim Z latent space
 #Pending
-batch_size = 5
+batch_size = 50
 z_size = 10
 
 learning_rate_gen = 5e-5
 learning_rate_dis = 5e-5
-shape_size = [13,13,13,3]
+shape_size = [9,9,9,3]
 
-max_iter_step = 2
+max_iter_step = 2000
 
 device_gpu = '/gpu:0'
 device_cpu = '/cpu:0'
@@ -34,58 +34,66 @@ Citers = 5
 log_path = './log/chair/'
 record_path = './data/tfrecord/'
 
-n_epoch = 50
+n_epoch = 500
 
 clamp_lower = -0.01
 clamp_upper = 0.01
 
+def init_weights():
+
+	global weights
+	weights = {}
+	xavier_init = tf.contrib.layers.xavier_initializer()
+
+	# filter for deconv3d: A 5-D Tensor with the same type as value and shape [depth, height, width, output_channels, in_channels]
+	weights['wg1'] = tf.get_variable("wg1", shape=[z_size,3*3*3*384], initializer=xavier_init)
+	weights['wg2'] = tf.get_variable("wg2", shape=[4, 4, 4, 192, 384], initializer=xavier_init)
+	weights['wg3'] = tf.get_variable("wg3", shape=[4, 4, 4, 3, 192], initializer=xavier_init)
+	
+def init_biases():
+	
+	global biases
+	biases = {}
+	zero_init = tf.zeros_initializer()
+
+	biases['bg1'] = tf.get_variable("bg1", shape=[3*3*3*384], initializer=zero_init)
+	biases['bg2'] = tf.get_variable("bg2", shape=[192], initializer=zero_init)
+	biases['bg3'] = tf.get_variable("bg3", shape=[3], initializer=zero_init)
+   
 def generator(z, batch_size=batch_size,phase_train=True, ):
-	#input 10(pending) dim Z latent space
-	#Pending
-	stride_g = [2,2,2]
-	kernel_g1 = [4,4,4]
-	kernel_g2 = [8,8,8] 
-	kernel_g3 = [16,16,16]
-	kernel_g4 = [32,32,32]
-	kernel_g5 = [64,64,64]
+	strides = [1,2,2,2,1]
+
+	output_shape = {
+		'g1':[batch_size,3,3,3,384],
+		'g2':[batch_size,5,5,5,192],
+		'g3':[batch_size,9,9,9,3],
+	}
 
 	with tf.variable_scope("generator"):
 		print "z shape: ", z.shape
-
-		net = tf.reshape(z, (batch_size,1,1,1,z_size))
-		g1 = ly.conv3d_transpose(inputs=net, filters=384, kernel_size=kernel_g1, strides=stride_g
-			, padding="VALID", activation=tf.nn.relu, activity_regularizer=cly.batch_norm, 
-			kernel_initializer=xavier_init)
+		g1 = tf.add(tf.matmul(z, weights['wg1']), biases['bg1'])
+		g1 = tf.reshape(g1, output_shape['g1'])
+		g1 = tf.contrib.layers.batch_norm(g1, is_training=phase_train)
 
 		print "g1 shape: ", g1.shape
 
-		g2 = ly.conv3d_transpose(inputs=g1, filters=192, kernel_size=kernel_g2, strides=stride_g
-			, padding="SAME", activation=tf.nn.relu, activity_regularizer=cly.batch_norm, 
-			kernel_initializer=xavier_init)
+		g2 = tf.nn.conv3d_transpose(g1, weights['wg2'], output_shape=output_shape['g2'], strides=strides, padding="SAME")
+		g2 = tf.nn.bias_add(g2, biases['bg2'])
+		g2 = tf.contrib.layers.batch_norm(g2, is_training=phase_train)
+		g2 = tf.nn.relu(g2)
 
 		print "g2 shape: ", g2.shape
-
-		g3 = ly.conv3d_transpose(inputs=g2, filters=3, kernel_size=kernel_g3, strides=stride_g
-			, padding="SAME", activation=tf.nn.tanh, kernel_initializer=xavier_init)
+		
+		g3 = tf.nn.conv3d_transpose(g2, weights['wg3'], output_shape=output_shape['g3'], strides=strides, padding="SAME")
+		g3 = tf.nn.bias_add(g3, biases['bg3'])                                   
+		g3 = tf.nn.sigmoid(g3)
 
 		print "g3 shape: ", g3.shape
-
-		# g4 = ly.conv3d_transpose(inputs=g3, filters=64, kernel_size=kernel_g4, strides=stride_g
-		# 	, padding="SAME", activation=tf.nn.relu, activity_regularizer=cly.batch_norm, 
-		# 	kernel_initializer=xavier_init)
-
-		# print "g4 shape: ", g4.shape
-
-		# g5 = ly.conv3d_transpose(inputs=g4, filters=3, kernel_size=kernel_g5, strides=stride_g
-		# 	, padding="SAME", activation=tf.nn.tanh, kernel_initializer=xavier_init)
-
-		# print "g5 shape: ", g5.shape
 
 	return g3
 
 def discriminator(inputs, phase_train=True, reuse=False):
 	stride_d = [2,2,2]
-	stride_d5 = [1,1,1]
 	kernel_d = [4,4,4]
 
 	with tf.variable_scope("discriminator") as scope:
@@ -94,36 +102,24 @@ def discriminator(inputs, phase_train=True, reuse=False):
 
 		print "inputs shape: ", inputs.shape
 
-		d1 = ly.conv3d(inputs=inputs, filters=3, kernel_size=kernel_d,
+		d1 = ly.conv3d(inputs=inputs, filters=192, kernel_size=kernel_d,
 			strides=stride_d, padding="SAME",activation=leaky_relu, activity_regularizer=cly.batch_norm,
 			kernel_initializer=xavier_init)
 
 		print "d1 shape: ", d1.shape
 
-		d2 = ly.conv3d(inputs=d1, filters=192, kernel_size=kernel_d,
+		d2 = ly.conv3d(inputs=d1, filters=384, kernel_size=kernel_d,
 			strides=stride_d, padding="SAME",activation=leaky_relu, activity_regularizer=cly.batch_norm,
 			kernel_initializer=xavier_init)
 
 		print "d2 shape: ", d2.shape
 
-		d3 = ly.conv3d(inputs=d2, filters=384, kernel_size=kernel_d,
-			strides=stride_d, padding="SAME",activation=leaky_relu, activity_regularizer=cly.batch_norm,
-			kernel_initializer=xavier_init)
+		d3 = cly.fully_connected(tf.reshape(
+			d2, [batch_size, -1]), 1, activation_fn=None)
 
 		print "d3 shape: ", d3.shape
 
-		# d4 = ly.conv3d(inputs=d3, filters=512, kernel_size=kernel_d,
-		# 	strides=stride_d, padding="SAME",activation=leaky_relu, activity_regularizer=cly.batch_norm,
-		# 	kernel_initializer=xavier_init)
-
-		# print "d4 shape: ", d4.shape
-
-		d4 = cly.fully_connected(tf.reshape(
-			d3, [batch_size, -1]), 1, activation_fn=None)
-
-		print "d4 shape: ", d4.shape
-
-	return d4
+	return d3
 
 def build_graph(real_cp):
 
@@ -176,14 +172,14 @@ def main():
 	config.gpu_options.allow_growth = True
 	config.gpu_options.per_process_gpu_memory_fraction = 0.8
 
-	cp_batch = load_data(record_path, n_epoch, batch_size, tuple(shape_size))
-	with tf.device(device_cpu):
-			opt_g, opt_d = build_graph(cp_batch)
-
-	summary_writer = tf.summary.FileWriter(log_path, sess.graph)
+	with tf.device(device_gpu):
+		weights = init_weights()
+		biases = init_biases()
+		cp_batch = load_data(record_path, n_epoch, batch_size, tuple(shape_size))
+		opt_g, opt_d = build_graph(cp_batch)
 
 	with tf.Session(config=config) as sess:
-		
+		summary_writer = tf.summary.FileWriter(log_path, sess.graph)
 		init_op = tf.local_variables_initializer()
 		sess.run(init_op)
 		sess.run(tf.global_variables_initializer())

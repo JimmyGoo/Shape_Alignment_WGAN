@@ -4,7 +4,7 @@ from sys import argv
 import scipy.io
 import numpy as np
 
-size = [13,13,13,3]
+size = [9,9,9,3]
 valid = True
 
 def generate(file_path, record_path):
@@ -25,7 +25,9 @@ def generate(file_path, record_path):
 		
 		curCP = np.array(mat['dstCP'])
 		curCP = np.transpose(curCP)
+		print curCP.shape
 		curCP = np.reshape(curCP, size)
+		print 
 		curCP_raw = curCP.tobytes()
 		example = tf.train.Example(features=tf.train.Features(feature={
 			'dstCP': tf.train.Feature(bytes_list=tf.train.BytesList(value=[curCP_raw])),
