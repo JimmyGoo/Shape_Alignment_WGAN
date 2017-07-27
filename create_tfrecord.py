@@ -4,6 +4,9 @@ from sys import argv
 import scipy.io
 import numpy as np
 
+size = [13,13,13,3]
+valid = True
+
 def generate(file_path, record_path):
 	path = file_path
 	if path[len(path) - 1] != '/':
@@ -19,16 +22,10 @@ def generate(file_path, record_path):
 			continue
 
 		mat = scipy.io.loadmat(path + name)
-		#3*n
+		
 		curCP = np.array(mat['dstCP'])
-		offset = np.nanmin(curCP, axis=1)
-		curCP -= np.reshape(offset, (3,1))
-		maxVal = np.max(curCP)
-		curCP *= int(64 / maxVal)
-		curCP = curCP.astype('int')
-		backGround = np.zeros([64,64,64])
-		backGround[curCP[0,:], curCP[1,:], curCP[2,:]] += 1
-
+		curCP = np.transpose(curCP)
+		curCP = np.reshape(curCP, size)
 		curCP_raw = curCP.tobytes()
 		example = tf.train.Example(features=tf.train.Features(feature={
 			'dstCP': tf.train.Feature(bytes_list=tf.train.BytesList(value=[curCP_raw])),

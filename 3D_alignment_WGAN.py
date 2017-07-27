@@ -175,15 +175,15 @@ def main():
 
 	config.gpu_options.allow_growth = True
 	config.gpu_options.per_process_gpu_memory_fraction = 0.8
-	
-	with tf.Session(config=config) as sess:
-		summary_writer = tf.summary.FileWriter(log_path, sess.graph)
-	
-		cp_batch = load_data(record_path, n_epoch, batch_size, tuple(shape_size))
-		print cp_batch
-		with tf.device(device_cpu):
+
+	cp_batch = load_data(record_path, n_epoch, batch_size, tuple(shape_size))
+	with tf.device(device_cpu):
 			opt_g, opt_d = build_graph(cp_batch)
 
+	summary_writer = tf.summary.FileWriter(log_path, sess.graph)
+
+	with tf.Session(config=config) as sess:
+		
 		init_op = tf.local_variables_initializer()
 		sess.run(init_op)
 		sess.run(tf.global_variables_initializer())
