@@ -22,7 +22,6 @@ def read_and_decode(queue, size):
 	shape = tf.decode_raw(shape, tf.float64)
 	shape = tf.reshape(shape, size)
 	shape = tf.cast(shape, tf.float32)
-
 	return shape
 
 def load_data(record_path, n_epoch, batch_size, shape_size):
@@ -30,7 +29,13 @@ def load_data(record_path, n_epoch, batch_size, shape_size):
 	print "loading tfrecord: ", filenames
 	filename_queue = tf.train.string_input_producer(filenames, num_epochs=None)
 	shape = read_and_decode(filename_queue, shape_size)
-	print shape
 	shape_batch = tf.train.batch([shape], batch_size=batch_size)
-	print shape_batch
 	return shape_batch
+
+def clear_log(log_path):
+	for f in os.listdir(log_path):
+		if f[-4:] == '.g01':
+			name = log_path + f
+			os.remove(name)
+			print "log deleted: ",name
+

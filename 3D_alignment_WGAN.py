@@ -6,19 +6,13 @@ from functools import partial
 from sys import argv
 
 os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
-###Problem
-
-##8 * 8 * 8 in voxel space?
-##giving output S = 64 64 64, how to back in 8 * 8 * 8(S value is not int, S maybe larger then 8 * 8 * 8, value in S dont have
-##corresponding index)
 
 xavier_init = cly.xavier_initializer()
-#input 10(pending) dim Z latent space
-#Pending
-batch_size = 50
+
+batch_size = 200
 z_size = 10
 
-learning_rate_gen = 5e-5
+learning_rate_gen = 0.0025
 learning_rate_dis = 5e-5
 shape_size = [9,9,9,3]
 
@@ -34,10 +28,18 @@ Citers = 5
 log_path = './log/chair/'
 record_path = './data/tfrecord/'
 
-n_epoch = 500
+n_epoch = 5000
 
 clamp_lower = -0.01
 clamp_upper = 0.01
+
+resume = False
+
+filter_num_d = {
+	'1':3,
+	'2':192, 
+	'3':384,
+}
 
 def init_weights():
 
@@ -46,9 +48,9 @@ def init_weights():
 	xavier_init = tf.contrib.layers.xavier_initializer()
 
 	# filter for deconv3d: A 5-D Tensor with the same type as value and shape [depth, height, width, output_channels, in_channels]
-	weights['wg1'] = tf.get_variable("wg1", shape=[z_size,3*3*3*384], initializer=xavier_init)
-	weights['wg2'] = tf.get_variable("wg2", shape=[4, 4, 4, 192, 384], initializer=xavier_init)
-	weights['wg3'] = tf.get_variable("wg3", shape=[4, 4, 4, 3, 192], initializer=xavier_init)
+	weights['wg1'] = tf.get_variable("wg1", shape=[z_size,3*3*3*filter_num_d['3']], initializer=xavier_init)
+	weights['wg2'] = tf.get_variable("wg2", shape=[4, 4, 4, filter_num_d['2'], filter_num_d['3']], initializer=xavier_init)
+	weights['wg3'] = tf.get_variable("wg3", shape=[4, 4, 4, filter_num_d['1'], filter_num_d['2']], initializer=xavier_init)
 	
 def init_biases():
 	
@@ -56,17 +58,17 @@ def init_biases():
 	biases = {}
 	zero_init = tf.zeros_initializer()
 
-	biases['bg1'] = tf.get_variable("bg1", shape=[3*3*3*384], initializer=zero_init)
-	biases['bg2'] = tf.get_variable("bg2", shape=[192], initializer=zero_init)
-	biases['bg3'] = tf.get_variable("bg3", shape=[3], initializer=zero_init)
+	biases['bg1'] = tf.get_variable("bg1", shape=[3*3*3*filter_num_d['3']], initializer=zero_init)
+	biases['bg2'] = tf.get_variable("bg2", shape=[filter_num_d['2']], initializer=zero_init)
+	biases['bg3'] = tf.get_variable("bg3", shape=[filter_num_d['1']], initializer=zero_init)
    
 def generator(z, batch_size=batch_size,phase_train=True, ):
 	strides = [1,2,2,2,1]
 
 	output_shape = {
-		'g1':[batch_size,3,3,3,384],
-		'g2':[batch_size,5,5,5,192],
-		'g3':[batch_size,9,9,9,3],
+		'g1':[batch_size,3,3,3,filter_num_d['3']],
+		'g2':[batch_size,5,5,5,filter_num_d['2']],
+		'g3':[batch_size,9,9,9,filter_num_d['1']],
 	}
 
 	with tf.variable_scope("generator"):
@@ -102,13 +104,13 @@ def discriminator(inputs, phase_train=True, reuse=False):
 
 		print "inputs shape: ", inputs.shape
 
-		d1 = ly.conv3d(inputs=inputs, filters=192, kernel_size=kernel_d,
+		d1 = ly.conv3d(inputs=inputs, filters=filter_num_d['2'], kernel_size=kernel_d,
 			strides=stride_d, padding="SAME",activation=leaky_relu, activity_regularizer=cly.batch_norm,
 			kernel_initializer=xavier_init)
 
 		print "d1 shape: ", d1.shape
 
-		d2 = ly.conv3d(inputs=d1, filters=384, kernel_size=kernel_d,
+		d2 = ly.conv3d(inputs=d1, filters=filter_num_d['3'], kernel_size=kernel_d,
 			strides=stride_d, padding="SAME",activation=leaky_relu, activity_regularizer=cly.batch_norm,
 			kernel_initializer=xavier_init)
 
@@ -137,8 +139,25 @@ def build_graph(real_cp):
 	d_loss = tf.reduce_mean(fake_logit - true_logit)
 	g_loss = tf.reduce_mean(-fake_logit)
 
+	print "true logit shape: ", true_logit.shape
+	print "fake logit shape: ", fake_logit.shape
+
+	d_real_conf = tf.divide(tf.reduce_sum(true_logit), batch_size)
+	d_fake_conf = tf.divide(tf.reduce_sum(fake_logit), batch_size)
+
+	summary_real_conf = tf.summary.scalar("real_conf", d_real_conf)
+	summary_fake_conf = tf.summary.scalar("fake_conf", d_fake_conf)
+
+	d_output_x = true_logit
+	d_output_x = tf.maximum(tf.minimum(d_output_x, 0.99), 0.01)
+	summary_d_x_hist = tf.summary.histogram("d_prob_x", d_output_x)
+
+	d_output_z = -fake_logit
+	d_output_z = tf.maximum(tf.minimum(d_output_z, 0.99), 0.01)
+	summary_d_z_hist = tf.summary.histogram("d_prob_z", d_output_z)
+
 	g_loss_sum = tf.summary.scalar("g_loss", g_loss)
-	d_loss_sum = tf.summary.scalar("c_loss", d_loss)
+	d_loss_sum = tf.summary.scalar("d_loss", d_loss)
 
 	theta_g = tf.get_collection(
 		tf.GraphKeys.TRAINABLE_VARIABLES, scope="generator")
@@ -163,66 +182,62 @@ def build_graph(real_cp):
 		opt_d = tf.tuple(clipped_var_d)
 
 
-	return opt_g, opt_d
+	return opt_g, opt_d, g_loss, d_loss, d_real_conf, d_fake_conf
 
 def main():
-	merged_all = tf.summary.merge_all()
 	config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
-
 	config.gpu_options.allow_growth = True
 	config.gpu_options.per_process_gpu_memory_fraction = 0.8
+
+	clear_log(log_path)
+	print "Clear Log"
 
 	with tf.device(device_gpu):
 		weights = init_weights()
 		biases = init_biases()
 		cp_batch = load_data(record_path, n_epoch, batch_size, tuple(shape_size))
-		opt_g, opt_d = build_graph(cp_batch)
+		opt_g, opt_d, g_loss, d_loss, real_conf, fake_conf = build_graph(cp_batch)
+		merged_all = tf.summary.merge_all()		
+		print "Finish Building Graph"
 
 	with tf.Session(config=config) as sess:
-		summary_writer = tf.summary.FileWriter(log_path, sess.graph)
 		init_op = tf.local_variables_initializer()
 		sess.run(init_op)
 		sess.run(tf.global_variables_initializer())
 		coord = tf.train.Coordinator()
 		threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-		print "Finish Building Graph"
+		summary_writer = tf.summary.FileWriter(log_path, sess.graph)
+
 		print "Finish Init and Start Training Step"
+
+		if resume:
+			print("Load existing model " + "!"*10)
+			saver = tf.train.Saver()
+			saver.restore(sess, model_file_name)
 
 		saver = tf.train.Saver()
 
 		for i in range(max_iter_step):
 			if i < 25 or i % 500 == 0:
-				citers = 100
+				citers = 20
 			else:
 				citers = Citers
 
-			print "step: %r of total step %r" % (i, max_iter_step)
+			if i % 5 == 0 and i != 0:
+				print "step: %r of total step %r, fake_conf %r g_loss %r, real_conf %r, d_loss %r" % (i, max_iter_step,
+					sess.run(fake_conf), sess.run(g_loss), sess.run(real_conf), sess.run(d_loss))
 
 			for j in range(citers):
-				print "citers %r of %r during step %r" % (j, citers, i)
-				if i % 100 == 99 and j == 0:
-				
-					run_options = tf.RunOptions(
-						trace_level=tf.RunOptions.FULL_TRACE)
-					run_metadata = tf.RunMetadata()
-					_, merged = sess.run([opt_d, merged_all],
-										 options=run_options, run_metadata=run_metadata)
-
-					summary_writer.add_summary(merged, i)
-					summary_writer.add_run_metadata(
-						run_metadata, 'critic_metadata {}'.format(i), i)
+				if j % 10 == 0 and j != 0 :
+					print "citers %r of %r during step %r d_citer_loss: %r" % (j, citers, i, sess.run(d_loss))
 				else:
-		
 					sess.run([opt_d])
-
-			if i % 100 == 99:
-				_, merged = sess.run([opt_g, merged_all],
-					 options=run_options, run_metadata=run_metadata)
-				summary_writer.add_summary(merged, i)
-				summary_writer.add_run_metadata(
-					run_metadata, 'generator_metadata {}'.format(i), i)
 			else:
-				sess.run([opt_g])                
+				sess.run([opt_g])
+
+			merged = sess.run(merged_all)
+			summary_writer.add_summary(merged, i)
+
 			if i % 1000 == 999:
 				saver.save(sess, os.path.join(
 					ckpt_dir, "model.ckpt"), global_step=i)
