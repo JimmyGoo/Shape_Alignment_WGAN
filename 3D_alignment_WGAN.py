@@ -22,7 +22,7 @@ learning_rate_gen = 5e-5
 learning_rate_dis = 5e-5
 shape_size = [13,13,13,3]
 
-max_iter_step = 2000
+max_iter_step = 2
 
 device_gpu = '/gpu:0'
 device_cpu = '/cpu:0'
@@ -34,7 +34,7 @@ Citers = 5
 log_path = './log/chair/'
 record_path = './data/tfrecord/'
 
-n_epoch = 5
+n_epoch = 50
 
 clamp_lower = -0.01
 clamp_upper = 0.01
@@ -119,7 +119,7 @@ def discriminator(inputs, phase_train=True, reuse=False):
 		# print "d4 shape: ", d4.shape
 
 		d4 = cly.fully_connected(tf.reshape(
-            d3, [batch_size, -1]), 1, activation_fn=None)
+			d3, [batch_size, -1]), 1, activation_fn=None)
 
 		print "d4 shape: ", d4.shape
 
@@ -177,19 +177,22 @@ def main():
 	config.gpu_options.per_process_gpu_memory_fraction = 0.8
 	
 	with tf.Session(config=config) as sess:
-		coord = tf.train.Coordinator()
-		threads = tf.train.start_queue_runners(sess=sess, coord=coord)
 		summary_writer = tf.summary.FileWriter(log_path, sess.graph)
 	
 		cp_batch = load_data(record_path, n_epoch, batch_size, tuple(shape_size))
-
-		with tf.device(device_gpu):
+		print cp_batch
+		with tf.device(device_cpu):
 			opt_g, opt_d = build_graph(cp_batch)
 
+		init_op = tf.local_variables_initializer()
+		sess.run(init_op)
 		sess.run(tf.global_variables_initializer())
-
+		coord = tf.train.Coordinator()
+		threads = tf.train.start_queue_runners(sess=sess, coord=coord)
 		print "Finish Building Graph"
 		print "Finish Init and Start Training Step"
+
+		saver = tf.train.Saver()
 
 		for i in range(max_iter_step):
 			if i < 25 or i % 500 == 0:
@@ -201,7 +204,8 @@ def main():
 
 			for j in range(citers):
 				print "citers %r of %r during step %r" % (j, citers, i)
- 				if i % 100 == 99 and j == 0:
+				if i % 100 == 99 and j == 0:
+				
 					run_options = tf.RunOptions(
 						trace_level=tf.RunOptions.FULL_TRACE)
 					run_metadata = tf.RunMetadata()
@@ -212,7 +216,8 @@ def main():
 					summary_writer.add_run_metadata(
 						run_metadata, 'critic_metadata {}'.format(i), i)
 				else:
-					sess.run(opt_d)
+		
+					sess.run([opt_d])
 
 			if i % 100 == 99:
 				_, merged = sess.run([opt_g, merged_all],
@@ -221,7 +226,7 @@ def main():
 				summary_writer.add_run_metadata(
 					run_metadata, 'generator_metadata {}'.format(i), i)
 			else:
-				sess.run(opt_g)                
+				sess.run([opt_g])                
 			if i % 1000 == 999:
 				saver.save(sess, os.path.join(
 					ckpt_dir, "model.ckpt"), global_step=i)
