@@ -12,26 +12,23 @@ xavier_init = cly.xavier_initializer()
 batch_size = 200
 z_size = 10
 
-learning_rate_gen = 5e-5
-learning_rate_dis = 5e-5
+learning_rate_gen = 0.0025
+learning_rate_dis = 2e-4
 shape_size = [9,9,9,3]
 
 max_iter_step = 2000
 
+g_extra_step = 20
+
 device_gpu = '/gpu:0'
 device_cpu = '/cpu:0'
 
-Citers = 5
-
-log_path = './log/chair/'
+log_path = './log/chair/dcgan/'
 record_path = './data/tfrecord/'
 model_path = './model/chair/'
-model_file_name = 'model_wgan_' + str(shape_size[0])
+model_file_name = 'model_dcgan_' + str(shape_size[0])
 
 n_epoch = 5000
-
-clamp_lower = -0.01
-clamp_upper = 0.01
 
 resume = False
 
@@ -62,7 +59,7 @@ def init_biases():
 	biases['bg2'] = tf.get_variable("bg2", shape=[filter_num_d['2']], initializer=zero_init)
 	biases['bg3'] = tf.get_variable("bg3", shape=[filter_num_d['1']], initializer=zero_init)
    
-def generator(z, batch_size=batch_size,phase_train=True, ):
+def generator(z, batch_size=batch_size,phase_train=True, reuse=False):
 	strides = [1,2,2,2,1]
 
 	output_shape = {
@@ -71,7 +68,10 @@ def generator(z, batch_size=batch_size,phase_train=True, ):
 		'g3':[batch_size,9,9,9,filter_num_d['1']],
 	}
 
-	with tf.variable_scope("generator"):
+	with tf.variable_scope("generator") as scope:
+		if reuse:
+			scope.reuse_variables()
+
 		print "z shape: ", z.shape
 		g1 = tf.add(tf.matmul(z, weights['wg1']), biases['bg1'])
 		g1 = tf.reshape(g1, output_shape['g1'])
@@ -88,11 +88,13 @@ def generator(z, batch_size=batch_size,phase_train=True, ):
 		
 		g3 = tf.nn.conv3d_transpose(g2, weights['wg3'], output_shape=output_shape['g3'], strides=strides, padding="SAME")
 		g3 = tf.nn.bias_add(g3, biases['bg3'])                                   
-		g3 = tf.nn.sigmoid(g3)
+		g3 = tf.tanh(g3)
 
 		print "g3 shape: ", g3.shape
 
 	return g3
+
+
 
 def discriminator(inputs, phase_train=True, reuse=False):
 	stride_d = [2,2,2]
@@ -136,8 +138,10 @@ def build_graph(real_cp):
 	true_logit = dis(real_cp)
 	fake_logit = dis(fake_cp, reuse=True)
 
-	d_loss = tf.reduce_mean(fake_logit - true_logit)
-	g_loss = tf.reduce_mean(-fake_logit)
+	g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(fake_logit),logits=fake_logit))
+	d_loss =  tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.zeros_like(fake_logit), logits=fake_logit))
+	d_loss += tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(true_logit), logits=true_logit))
+	d_loss /= 2.
 
 	print "true logit shape: ", true_logit.shape
 	print "fake logit shape: ", fake_logit.shape
@@ -163,26 +167,9 @@ def build_graph(real_cp):
 		tf.GraphKeys.TRAINABLE_VARIABLES, scope="generator")
 	d_params = tf.get_collection(
 		tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator")
-	opt_g = tf.train.RMSPropOptimizer(learning_rate=learning_rate_gen).minimize(g_loss, var_list=g_params)
-    opt_d = tf.train.RMSPropOptimizer(learning_rate=learning_rate_dis).minimize(d_loss, var_list=d_params)
 
-	# counter_g = tf.Variable(trainable=False, initial_value=0, dtype=tf.int32)
-	# opt_g = cly.optimize_loss(loss=g_loss, learning_rate=learning_rate_gen,
-	# 				optimizer=partial(tf.train.AdamOptimizer, beta1=0.5, beta2=0.9) if is_adam is True else tf.train.RMSPropOptimizer, 
-	# 				variables=theta_g, global_step=counter_g,
-	# 				summaries = ['gradient_norm'])
-	# counter_d = tf.Variable(trainable=False, initial_value=0, dtype=tf.int32)
-	# opt_d = cly.optimize_loss(loss=d_loss, learning_rate=learning_rate_dis,
-	# 				optimizer=
-	# 				variables=theta_d, global_step=counter_d,
-	# 				summaries = ['gradient_norm'])
-
-	
-	clipped_var_d = [tf.assign(var, tf.clip_by_value(var, clamp_lower, clamp_upper)) for var in d_params]
-	# merge the clip operations on critic variables
-	with tf.control_dependencies([opt_d]):
-		opt_d = tf.tuple(clipped_var_d)
-
+	opt_g = tf.train.AdamOptimizer(learning_rate=learning_rate_gen, beta1=0.5).minimize(g_loss, var_list=g_params)
+	opt_d = tf.train.AdamOptimizer(learning_rate=learning_rate_dis, beta1=0.5).minimize(d_loss, var_list=d_params)
 
 	return opt_g, opt_d, g_loss, d_loss, d_real_conf, d_fake_conf
 
@@ -220,22 +207,20 @@ def main():
 		saver = tf.train.Saver(max_to_keep=None)
 
 		for i in range(max_iter_step):
-			if i < 25 or i % 500 == 0:
-				citers = 15
-			else:
-				citers = Citers
+			sess.run([opt_d])
 
-			if i % 5 == 4 and i != 0:
-				print "step: %r of total step %r, fake_conf %r g_loss %r, real_conf %r, d_loss %r" % (i+1, max_iter_step,
-					sess.run(fake_conf), sess.run(g_loss), sess.run(real_conf), sess.run(d_loss))
+			if sess.run(fake_conf) < 0.5:
+				for j in range(g_extra_step):
+					sess.run([opt_g])
+					if j % 5 == 4:
+						print "extra: %r of total %r during step %r, fake_conf %r g_loss %r, real_conf %r, d_loss %r" % (j+1, 
+							g_extra_step, i+1, sess.run(fake_conf), sess.run(g_loss), sess.run(real_conf), sess.run(d_loss))
 
-			for j in range(citers):
-				if j % 5 == 4 and j != 0 :
-					print "citers %r of %r during step %r d_citer_loss: %r" % (j+1, citers, i+1, sess.run(d_loss))
-				else:
-					sess.run([opt_d])
 			else:
 				sess.run([opt_g])
+			if i % 5 == 4:
+				print "step: %r of total step %r, fake_conf %r g_loss %r, real_conf %r, d_loss %r" % (i+1, max_iter_step,
+					sess.run(fake_conf), sess.run(g_loss), sess.run(real_conf), sess.run(d_loss))
 
 			merged = sess.run(merged_all)
 			summary_writer.add_summary(merged, i)
