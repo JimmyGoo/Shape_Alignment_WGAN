@@ -10,9 +10,9 @@ os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
 xavier_init = cly.xavier_initializer()
 
 batch_size = 64
-z_size = 10
+z_size = 128
 
-learning_rate_gen = 0.02
+learning_rate_gen = 2e-4
 
 learning_rate_dis = 5e-5
 shape_size = [9,9,9,3]
@@ -39,8 +39,8 @@ resume = False
 
 filter_num_d = {
 	'1':3,
-	'2':32, 
-	'3':64,
+	'2':8, 
+	'3':16,
 }
 
 def init_weights():
@@ -157,10 +157,10 @@ def build_graph(real_cp):
 	summary_real_conf = tf.summary.scalar("real_conf", d_real_conf)
 	summary_fake_conf = tf.summary.scalar("fake_conf", d_fake_conf)
 
-	rimg = tf.placeholder(tf.float32)
+	# rimg = tf.placeholder(tf.float32)
 	fimg = tf.placeholder(tf.float32)
-	real_img_summary = tf.summary.image('real', rimg, max_outputs=batch_size)
-	fake_img_summary = tf.summary.image('fake', fimg, max_outputs=batch_size)
+	# real_img_summary = tf.summary.image('real', rimg, max_outputs=batch_size)
+	fake_img_summary = tf.summary.image('fake', fimg, max_outputs=10)
 
 	d_output_x = true_logit
 	d_output_x = tf.maximum(tf.minimum(d_output_x, 0.99), 0.01)
@@ -181,7 +181,7 @@ def build_graph(real_cp):
 	opt_g = tf.train.AdamOptimizer(learning_rate=learning_rate_gen, beta1=0.5).minimize(g_loss, var_list=g_params)
 	opt_d = tf.train.AdamOptimizer(learning_rate=learning_rate_dis, beta1=0.5).minimize(d_loss, var_list=d_params)
 
-	return opt_g, opt_d, g_loss, d_loss, d_real_conf, d_fake_conf, real_cp, fake_cp, rimg, fimg
+	return opt_g, opt_d, g_loss, d_loss, d_real_conf, d_fake_conf, fake_cp, fimg
 
 def main():
 	config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
@@ -197,7 +197,7 @@ def main():
 		weights = init_weights()
 		biases = init_biases()
 		cp_batch = load_data(record_path, n_epoch, batch_size, tuple(shape_size))
-		opt_g, opt_d, g_loss, d_loss, real_conf, fake_conf, real_cp, fake_cp, rimg, fimg = build_graph(cp_batch)
+		opt_g, opt_d, g_loss, d_loss, real_conf, fake_conf, fake_cp, fimg = build_graph(cp_batch)
 		merged_all = tf.summary.merge_all()		
 		print "Finish Building Graph"
 
@@ -220,41 +220,46 @@ def main():
 
 		for i in range(max_iter_step):
 			if i < 25 or i % 500 == 0:
-				g_extra_step = 300
+				d_extra_step = 20
 
-			if sess.run(real_conf) < 0.8:
+			if sess.run(real_conf) < 0.8 and sess.run(g_loss) < 0.65:
 				for j in range(d_extra_step):
 					sess.run([opt_d])
-					if j % 50 == 49:
+					if j % 5 == 4:
 						print "d_extra: %r of total %r during step %r real_conf %r, d_loss %r" % (j+1, 
 							d_extra_step, i+1, sess.run(real_conf), sess.run(d_loss))
 			else:
 				sess.run([opt_d])
 
-			while sess.run(fake_conf) < 0.5 and sess.run(real_conf) > 0.85:
+			if sess.run(fake_conf) < 0.5:
+				g_extra_step = 500
+
+			if sess.run(fake_conf) < 0.5 and sess.run(real_conf) > 0.8:
 				for j in range(g_extra_step):
 					sess.run([opt_g])
 					if j % 50 == 49:
 						print "g_extra: %r of total %r during step %r, fake_conf %r g_loss %r, real_conf %r d_loss %r" % (j+1, 
 							g_extra_step, i+1, sess.run(fake_conf), sess.run(g_loss), sess.run(real_conf), sess.run(d_loss))
 
-			if i % 5 == 4:
-				print "step: %r of total step %r" % (i+1, max_iter_step)
+			
+			print "step: %r of total step %r" % (i+1, max_iter_step)
+			print "fake_conf %r g_loss %r, real_conf %r d_loss %r" % (sess.run(fake_conf), sess.run(g_loss), sess.run(real_conf), sess.run(d_loss))
 
-			rcp = sess.run(real_cp)
-			rcp = np.reshape(rcp, (batch_size,-1,3))
+			# rcp = sess.run(real_cp)
+			# rcp = np.reshape(rcp, (batch_size,-1,3))
 			fcp = sess.run(fake_cp)
 			fcp = np.reshape(fcp, (batch_size,-1,3))
-			rvimg = vis_image(bsCoeff, rcp, i)
+			# rvimg = vis_image(bsCoeff, rcp, i)
 			fvimg = vis_image(bsCoeff, fcp, i, vis_path)
-			merged = sess.run(merged_all, feed_dict={rimg:rvimg, fimg:fvimg})
+			# merged = sess.run(merged_all, feed_dict={rimg:rvimg, fimg:fvimg})
+			merged = sess.run(merged_all, feed_dict={fimg:fvimg})
 			summary_writer.add_summary(merged, i)
 
-			if i % 1000 == 999 or i == 0:
+			if i % 20 == 9:
 				if not os.path.exists(model_path):
 					os.mkdir(model_path)
-				saver.save(sess, model_path+model_file_name+".ckpt")
-				print("saving model " + "!"*10)
+				saver.save(sess, model_path+model_file_name+".ckpt", global_step=i)
+				print "saving model of step " + str(i) + "!"*10 
 
 if __name__ == '__main__':
 	main()
