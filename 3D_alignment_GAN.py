@@ -9,16 +9,19 @@ os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
 
 xavier_init = cly.xavier_initializer()
 
-batch_size = 200
+batch_size = 64
 z_size = 10
 
-learning_rate_gen = 0.0025
-learning_rate_dis = 2e-4
+learning_rate_gen = 0.02
+
+learning_rate_dis = 5e-5
 shape_size = [9,9,9,3]
 
 max_iter_step = 2000
 
-g_extra_step = 20
+g_extra_step = 50
+d_extra_step = 5
+
 
 device_gpu = '/gpu:0'
 device_cpu = '/cpu:0'
@@ -27,6 +30,8 @@ log_path = './log/chair/dcgan/'
 record_path = './data/tfrecord/'
 model_path = './model/chair/'
 model_file_name = 'model_dcgan_' + str(shape_size[0])
+bs_path = './data/bsCoeff/1_bsCoeff.mat'
+vis_path = './vis/'
 
 n_epoch = 5000
 
@@ -34,8 +39,8 @@ resume = False
 
 filter_num_d = {
 	'1':3,
-	'2':192, 
-	'3':384,
+	'2':32, 
+	'3':64,
 }
 
 def init_weights():
@@ -152,6 +157,11 @@ def build_graph(real_cp):
 	summary_real_conf = tf.summary.scalar("real_conf", d_real_conf)
 	summary_fake_conf = tf.summary.scalar("fake_conf", d_fake_conf)
 
+	rimg = tf.placeholder(tf.float32)
+	fimg = tf.placeholder(tf.float32)
+	real_img_summary = tf.summary.image('real', rimg, max_outputs=batch_size)
+	fake_img_summary = tf.summary.image('fake', fimg, max_outputs=batch_size)
+
 	d_output_x = true_logit
 	d_output_x = tf.maximum(tf.minimum(d_output_x, 0.99), 0.01)
 	summary_d_x_hist = tf.summary.histogram("d_prob_x", d_output_x)
@@ -171,21 +181,23 @@ def build_graph(real_cp):
 	opt_g = tf.train.AdamOptimizer(learning_rate=learning_rate_gen, beta1=0.5).minimize(g_loss, var_list=g_params)
 	opt_d = tf.train.AdamOptimizer(learning_rate=learning_rate_dis, beta1=0.5).minimize(d_loss, var_list=d_params)
 
-	return opt_g, opt_d, g_loss, d_loss, d_real_conf, d_fake_conf
+	return opt_g, opt_d, g_loss, d_loss, d_real_conf, d_fake_conf, real_cp, fake_cp, rimg, fimg
 
 def main():
 	config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
 	config.gpu_options.allow_growth = True
 	config.gpu_options.per_process_gpu_memory_fraction = 0.8
 
-	clear_log(log_path)
-	print "Clear Log"
+	clear_file(log_path, '.g01')
+	clear_file(vis_path, '.png')
+	print "Clear File"
+	bsCoeff = load_bsCoeff(bs_path)
 
 	with tf.device(device_gpu):
 		weights = init_weights()
 		biases = init_biases()
 		cp_batch = load_data(record_path, n_epoch, batch_size, tuple(shape_size))
-		opt_g, opt_d, g_loss, d_loss, real_conf, fake_conf = build_graph(cp_batch)
+		opt_g, opt_d, g_loss, d_loss, real_conf, fake_conf, real_cp, fake_cp, rimg, fimg = build_graph(cp_batch)
 		merged_all = tf.summary.merge_all()		
 		print "Finish Building Graph"
 
@@ -207,22 +219,35 @@ def main():
 		saver = tf.train.Saver(max_to_keep=None)
 
 		for i in range(max_iter_step):
-			sess.run([opt_d])
+			if i < 25 or i % 500 == 0:
+				g_extra_step = 300
 
-			if sess.run(fake_conf) < 0.5:
+			if sess.run(real_conf) < 0.8:
+				for j in range(d_extra_step):
+					sess.run([opt_d])
+					if j % 50 == 49:
+						print "d_extra: %r of total %r during step %r real_conf %r, d_loss %r" % (j+1, 
+							d_extra_step, i+1, sess.run(real_conf), sess.run(d_loss))
+			else:
+				sess.run([opt_d])
+
+			while sess.run(fake_conf) < 0.5 and sess.run(real_conf) > 0.85:
 				for j in range(g_extra_step):
 					sess.run([opt_g])
-					if j % 5 == 4:
-						print "extra: %r of total %r during step %r, fake_conf %r g_loss %r, real_conf %r, d_loss %r" % (j+1, 
+					if j % 50 == 49:
+						print "g_extra: %r of total %r during step %r, fake_conf %r g_loss %r, real_conf %r d_loss %r" % (j+1, 
 							g_extra_step, i+1, sess.run(fake_conf), sess.run(g_loss), sess.run(real_conf), sess.run(d_loss))
 
-			else:
-				sess.run([opt_g])
 			if i % 5 == 4:
-				print "step: %r of total step %r, fake_conf %r g_loss %r, real_conf %r, d_loss %r" % (i+1, max_iter_step,
-					sess.run(fake_conf), sess.run(g_loss), sess.run(real_conf), sess.run(d_loss))
+				print "step: %r of total step %r" % (i+1, max_iter_step)
 
-			merged = sess.run(merged_all)
+			rcp = sess.run(real_cp)
+			rcp = np.reshape(rcp, (batch_size,-1,3))
+			fcp = sess.run(fake_cp)
+			fcp = np.reshape(fcp, (batch_size,-1,3))
+			rvimg = vis_image(bsCoeff, rcp, i)
+			fvimg = vis_image(bsCoeff, fcp, i, vis_path)
+			merged = sess.run(merged_all, feed_dict={rimg:rvimg, fimg:fvimg})
 			summary_writer.add_summary(merged, i)
 
 			if i % 1000 == 999 or i == 0:

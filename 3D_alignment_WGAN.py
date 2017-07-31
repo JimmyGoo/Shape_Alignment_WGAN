@@ -9,7 +9,7 @@ os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
 
 xavier_init = cly.xavier_initializer()
 
-batch_size = 200
+batch_size = 64
 z_size = 10
 
 learning_rate_gen = 5e-5
@@ -37,8 +37,8 @@ resume = False
 
 filter_num_d = {
 	'1':3,
-	'2':192, 
-	'3':384,
+	'2':32, 
+	'3':64,
 }
 
 def init_weights():
@@ -225,12 +225,12 @@ def main():
 			else:
 				citers = Citers
 
-			if i % 5 == 4 and i != 0:
+			if i % 50 == 49 and i != 0:
 				print "step: %r of total step %r, fake_conf %r g_loss %r, real_conf %r, d_loss %r" % (i+1, max_iter_step,
 					sess.run(fake_conf), sess.run(g_loss), sess.run(real_conf), sess.run(d_loss))
 
 			for j in range(citers):
-				if j % 5 == 4 and j != 0 :
+				if j % 50 == 49 and j != 0 :
 					print "citers %r of %r during step %r d_citer_loss: %r" % (j+1, citers, i+1, sess.run(d_loss))
 				else:
 					sess.run([opt_d])
