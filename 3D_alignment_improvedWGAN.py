@@ -1,29 +1,15 @@
 import os, sys
-sys.path.append(os.getcwd())
-
 import time
-
 import numpy as np
 import tensorflow as tf
+from tensorflow import layers as ly
+import tensorflow.contrib.layers as cly
+from sys import argv
+from util import *
 
-import tflib as lib
-import tflib.ops.linear
-import tflib.ops.conv2d
-import tflib.ops.batchnorm
-import tflib.ops.deconv2d
-import tflib.save_images
-import tflib.cifar10
-import tflib.inception_score
-import tflib.plot
+os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
 
-##To do change conv2d to conv3d in lib
-##To do change deconv2d to deconv3d in lib
-Z_SIZE = 128
-
-
-DATA_DIR = ''
-if len(DATA_DIR) == 0:
-    raise Exception('Please specify path to data directory in gan_cifar.py!')
+xavier_init = cly.xavier_initializer()
 
 DIM = 128 # This overfits substantially; you're probably better off with 64
 LAMBDA = 10 # Gradient penalty lambda hyperparameter
@@ -31,152 +17,296 @@ CRITIC_ITERS = 5 # How many critic iterations per generator iteration
 BATCH_SIZE = 64 # Batch size
 ITERS = 200000 # How many generator iterations to train for
 OUTPUT_DIM = 3072 # Number of pixels in  (3*9*9*9)
+Z_SIZE = 128
+MERGE = 10
 
-lib.print_model_settings(locals().copy())
+VIS_SAVE = 100
+
+learning_rate_gen = 1e-2
+
+learning_rate_dis = 1e-4
+shape_size = [9,9,9,3]
+
+device_gpu = '/gpu:0'
+device_cpu = '/cpu:0'
+
+log_path = './log/chair/iwgan/'
+record_path = './data/tfrecord/'
+model_path = './model/chair/'
+model_file_name = 'model_iwgan_' + str(shape_size[0])
+bs_path = './data/bsCoeff/1_bsCoeff.mat'
+vis_path = './vis/iwgan/'
+
+n_epoch = 5000
+
+resume = False
+
+filter_num_d = {
+    '1':3,
+    '2':8, 
+    '3':16,
+    '4':32,
+}
+
+output_shape = {
+    'g1':[BATCH_SIZE,2,2,2,filter_num_d['4']],
+    'g2':[BATCH_SIZE,3,3,3,filter_num_d['3']],
+    'g3':[BATCH_SIZE,5,5,5,filter_num_d['2']],
+    'g4':[BATCH_SIZE,9,9,9,filter_num_d['1']]
+}
+out_s = output_shape['g4']
+OUTPUT_DIM = out_s[1] * out_s[2] * out_s[3] * out_s[4]
 
 def LeakyReLU(x, alpha=0.2):
     return tf.maximum(alpha*x, x)
 
-def ReLULayer(name, n_in, n_out, inputs):
-    output = lib.ops.linear.Linear(name+'.Linear', n_in, n_out, inputs)
-    return tf.nn.relu(output)
+def init_weights():
 
-def LeakyReLULayer(name, n_in, n_out, inputs):
-    output = lib.ops.linear.Linear(name+'.Linear', n_in, n_out, inputs)
-    return LeakyReLU(output)
+    global weights
+    weights = {}
+    xavier_init = tf.contrib.layers.xavier_initializer()
 
-def Generator(n_samples, noise=None):
+    g1_s = output_shape['g1']
+
+    # filter for deconv3d: A 5-D Tensor with the same type as value and shape [depth, height, width, output_channels, in_channels]
+    weights['wg1'] = tf.get_variable("wg1", shape=[Z_SIZE, g1_s[1]*g1_s[2]*g1_s[3]*filter_num_d['4']], initializer=xavier_init)
+    weights['wg2'] = tf.get_variable("wg2", shape=[4, 4, 4, filter_num_d['3'], filter_num_d['4']], initializer=xavier_init)
+    weights['wg3'] = tf.get_variable("wg3", shape=[4, 4, 4, filter_num_d['2'], filter_num_d['3']], initializer=xavier_init)
+    weights['wg4'] = tf.get_variable("wg4", shape=[4, 4, 4, filter_num_d['1'], filter_num_d['2']], initializer=xavier_init)
+    
+def init_biases():
+    
+    global biases
+    biases = {}
+    zero_init = tf.zeros_initializer()
+
+    g1_s = output_shape['g1']
+
+    biases['bg1'] = tf.get_variable("bg1", shape=[g1_s[1]*g1_s[2]*g1_s[3]*filter_num_d['4']], initializer=zero_init)
+    biases['bg2'] = tf.get_variable("bg2", shape=[filter_num_d['3']], initializer=zero_init)
+    biases['bg3'] = tf.get_variable("bg3", shape=[filter_num_d['2']], initializer=zero_init)
+    biases['bg4'] = tf.get_variable("bg4", shape=[filter_num_d['1']], initializer=zero_init)
+
+
+def Generator(n_samples, phase_train=True, noise=None, reuse=False):
     if noise is None:
-        noise = tf.random_normal([n_samples, 128])
+        noise = tf.random_normal([n_samples, Z_SIZE])
 
-    output = lib.ops.linear.Linear('Generator.Input', 128, 4*4*4*DIM, noise)
-    output = lib.ops.batchnorm.Batchnorm('Generator.BN1', [0], output)
-    output = tf.nn.relu(output)
-    output = tf.reshape(output, [-1, 4*DIM, 4, 4])
+    strides = [1,2,2,2,1]
 
-    output = lib.ops.deconv2d.Deconv2D('Generator.2', 4*DIM, 2*DIM, 5, output)
-    output = lib.ops.batchnorm.Batchnorm('Generator.BN2', [0,2,3], output)
-    output = tf.nn.relu(output)
+    with tf.variable_scope("generator") as scope:
+        if reuse:
+            scope.reuse_variables()
 
-    output = lib.ops.deconv2d.Deconv2D('Generator.3', 2*DIM, DIM, 5, output)
-    output = lib.ops.batchnorm.Batchnorm('Generator.BN3', [0,2,3], output)
-    output = tf.nn.relu(output)
+        print "noise shape: ", noise.shape
+        shape = output_shape['g1']
+        number_outputs = shape[1] * shape[2] * shape[3] * shape[4]
+        g1 = cly.fully_connected(inputs=noise, num_outputs=number_outputs, activation_fn=tf.nn.relu, 
+            normalizer_fn=cly.batch_norm)
+        g1 = tf.reshape(g1, output_shape['g1'])
 
-    output = lib.ops.deconv2d.Deconv2D('Generator.5', DIM, 3, 5, output)
+        print "g1 shape: ", g1.shape
 
-    output = tf.tanh(output)
+        g2 = tf.nn.conv3d_transpose(g1, weights['wg2'], output_shape=output_shape['g2'], strides=strides, padding="SAME")
+        g2 = tf.nn.bias_add(g2, biases['bg2'])
+        g2 = tf.contrib.layers.batch_norm(g2, is_training=phase_train)
+        g2 = tf.nn.relu(g2)
 
-    return tf.reshape(output, [-1, OUTPUT_DIM])
+        print "g2 shape: ", g2.shape
 
-def Discriminator(inputs):
-    output = tf.reshape(inputs, [-1, 3, 32, 32])
+        g3 = tf.nn.conv3d_transpose(g2, weights['wg3'], output_shape=output_shape['g3'], strides=strides, padding="SAME")
+        g3 = tf.nn.bias_add(g3, biases['bg3'])
+        g3 = tf.contrib.layers.batch_norm(g3, is_training=phase_train)
+        g3 = tf.nn.relu(g3)
 
-    output = lib.ops.conv2d.Conv2D('Discriminator.1', 3, DIM, 5, output, stride=2)
-    output = LeakyReLU(output)
+        print "g3 shape: ", g3.shape
 
-    output = lib.ops.conv2d.Conv2D('Discriminator.2', DIM, 2*DIM, 5, output, stride=2)
-    output = LeakyReLU(output)
+        g4 = tf.nn.conv3d_transpose(g3, weights['wg4'], output_shape=output_shape['g4'], strides=strides, padding="SAME")
+        g4 = tf.nn.bias_add(g4, biases['bg4'])                                   
+        g4 = tf.tanh(g4)
 
-    output = lib.ops.conv2d.Conv2D('Discriminator.3', 2*DIM, 4*DIM, 5, output, stride=2)
-    output = LeakyReLU(output)
+        print "g4 shape: ", g4.shape
 
-    output = tf.reshape(output, [-1, 4*4*4*DIM])
-    output = lib.ops.linear.Linear('Discriminator.Output', 4*4*4*DIM, 1, output)
+        output = tf.reshape(g4, [-1, OUTPUT_DIM])
+    return output
 
-    return tf.reshape(output, [-1])
+def Discriminator(inputs, phase_train=True, reuse=False):
 
-real_data_int = tf.placeholder(tf.int32, shape=[BATCH_SIZE, OUTPUT_DIM])
-real_data = 2*((tf.cast(real_data_int, tf.float32)/255.)-.5)
-fake_data = Generator(BATCH_SIZE)
+    stride_d = [2,2,2]
+    kernel_d = [4,4,4]
+   
+    with tf.variable_scope("discriminator") as scope:
+        if reuse:
+            scope.reuse_variables()
 
-disc_real = Discriminator(real_data)
-disc_fake = Discriminator(fake_data)
+        inputs = tf.reshape(inputs, output_shape['g4'])
+        print "inputs shape: ", inputs.shape
 
-gen_params = lib.params_with_name('Generator')
-disc_params = lib.params_with_name('Discriminator')
+        d1 = ly.conv3d(inputs=inputs, filters=filter_num_d['2'], kernel_size=kernel_d,
+            strides=stride_d, padding="SAME",activation=LeakyReLU, activity_regularizer=cly.batch_norm,
+            kernel_initializer=xavier_init)
 
-# Standard WGAN loss
-gen_cost = -tf.reduce_mean(disc_fake)
-disc_cost = tf.reduce_mean(disc_fake) - tf.reduce_mean(disc_real)
+        print "d1 shape: ", d1.shape
 
-# Gradient penalty
-alpha = tf.random_uniform(
-    shape=[BATCH_SIZE,1], 
-    minval=0.,
-    maxval=1.
-)
-differences = fake_data - real_data
-interpolates = real_data + (alpha*differences)
-gradients = tf.gradients(Discriminator(interpolates), [interpolates])[0]
-slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1]))
-gradient_penalty = tf.reduce_mean((slopes-1.)**2)
-disc_cost += LAMBDA*gradient_penalty
+        d2 = ly.conv3d(inputs=d1, filters=filter_num_d['3'], kernel_size=kernel_d,
+            strides=stride_d, padding="SAME",activation=LeakyReLU, activity_regularizer=cly.batch_norm,
+            kernel_initializer=xavier_init)
 
-gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=gen_params)
-disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=disc_params)
+        print "d2 shape: ", d2.shape
 
-# For generating samples
-fixed_noise_128 = tf.constant(np.random.normal(size=(128, 128)).astype('float32'))
-fixed_noise_samples_128 = Generator(128, noise=fixed_noise_128)
-def generate_image(frame, true_dist):
-    samples = session.run(fixed_noise_samples_128)
-    samples = ((samples+1.)*(255./2)).astype('int32')
-    lib.save_images.save_images(samples.reshape((128, 3, 32, 32)), 'samples_{}.jpg'.format(frame))
+        ##one layer deeper
 
-# For calculating inception score
-samples_100 = Generator(100)
-def get_inception_score():
-    all_samples = []
-    for i in xrange(10):
-        all_samples.append(session.run(samples_100))
-    all_samples = np.concatenate(all_samples, axis=0)
-    all_samples = ((all_samples+1.)*(255./2)).astype('int32')
-    all_samples = all_samples.reshape((-1, 3, 32, 32)).transpose(0,2,3,1)
-    return lib.inception_score.get_inception_score(list(all_samples))
+        d3 = ly.conv3d(inputs=d2, filters=filter_num_d['4'], kernel_size=kernel_d,
+            strides=stride_d, padding="SAME",activation=LeakyReLU, activity_regularizer=cly.batch_norm,
+            kernel_initializer=xavier_init)
 
-# Dataset iterators
-train_gen, dev_gen = lib.cifar10.load(BATCH_SIZE, data_dir=DATA_DIR)
-def inf_train_gen():
-    while True:
-        for images,_ in train_gen():
-            yield images
+        print "d3 shape: ", d3.shape
+
+        d4 = cly.fully_connected(tf.reshape(
+            d3, [BATCH_SIZE, -1]), 1, activation_fn=None)
+        d4 = tf.reshape(d4, [-1])
+
+        print "d4 shape: ", d4.shape
+
+    return d4
+
+def build_graph(real_cp):
+    real_cp = tf.reshape(real_cp, [BATCH_SIZE, OUTPUT_DIM])
+    fake_cp = Generator(BATCH_SIZE)
+
+    disc_real = Discriminator(real_cp)
+    disc_fake = Discriminator(fake_cp, reuse=True)
+
+    g_params = tf.get_collection(
+        tf.GraphKeys.TRAINABLE_VARIABLES, scope="generator")
+    d_params = tf.get_collection(
+        tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator")
+
+    # Standard WGAN loss
+    gen_cost = -tf.reduce_mean(disc_fake)
+    disc_cost = tf.reduce_mean(disc_fake) - tf.reduce_mean(disc_real)
+
+    print "true logit shape: ", disc_real.shape
+    print "fake logit shape: ", disc_fake.shape
+
+    d_real_conf = tf.divide(tf.reduce_sum(tf.maximum(tf.minimum(disc_real, 0.99), 0.01)), BATCH_SIZE)
+    d_fake_conf = tf.divide(tf.reduce_sum(tf.maximum(tf.minimum(disc_fake, 0.99), 0.01)), BATCH_SIZE)
+
+    summary_real_conf = tf.summary.scalar("real_conf", d_real_conf)
+    summary_fake_conf = tf.summary.scalar("fake_conf", d_fake_conf)
+
+    fimg = tf.placeholder(tf.float32)
+    fake_img_summary = tf.summary.image('fake', fimg, max_outputs=10)
+
+    d_output_x = disc_real
+    d_output_x = tf.maximum(tf.minimum(d_output_x, 0.99), 0.01)
+    summary_d_x_hist = tf.summary.histogram("d_prob_x", d_output_x)
+
+    d_output_z = -disc_fake
+    d_output_z = tf.maximum(tf.minimum(d_output_z, 0.99), 0.01)
+    summary_d_z_hist = tf.summary.histogram("d_prob_z", d_output_z)
+
+    g_loss_sum = tf.summary.scalar("g_loss", gen_cost)
+    d_loss_sum = tf.summary.scalar("d_loss", disc_cost)
+
+    # Gradient penalty
+    alpha = tf.random_uniform(
+        shape=[BATCH_SIZE,1], 
+        minval=0.,
+        maxval=1.
+    )
+
+    differences = fake_cp - real_cp
+    interpolates = real_cp + (alpha*differences)
+    gradients = tf.gradients(Discriminator(interpolates, reuse=True), [interpolates])[0]
+    slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1]))
+    gradient_penalty = tf.reduce_mean((slopes-1.)**2)
+    disc_cost += LAMBDA*gradient_penalty
+
+    gen_train_op = tf.train.AdamOptimizer(learning_rate=learning_rate_gen, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=g_params)
+    disc_train_op = tf.train.AdamOptimizer(learning_rate=learning_rate_dis, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=d_params)
+
+    merge_no_img = tf.summary.merge([summary_real_conf,summary_fake_conf,summary_d_z_hist,summary_d_x_hist, g_loss_sum, d_loss_sum])
+
+    return gen_train_op, disc_train_op, gen_cost, disc_cost, d_real_conf, d_fake_conf, fake_cp, fimg, merge_no_img
+
 
 # Train loop
-with tf.Session() as session:
-    session.run(tf.initialize_all_variables())
-    gen = inf_train_gen()
+def main():
+    config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
+    config.gpu_options.allow_growth = True
+    # config.gpu_options.per_process_gpu_memory_fraction = 0.8
 
-    for iteration in xrange(ITERS):
-        start_time = time.time()
-        # Train generator
-        if iteration > 0:
-            _ = session.run(gen_train_op)
-        # Train critic
-       
-        disc_iters = CRITIC_ITERS
-        for i in xrange(disc_iters):
-            _data = gen.next()
-            _disc_cost, _ = session.run([disc_cost, disc_train_op], feed_dict={real_data_int: _data})
+    clear_file(log_path, '.g01')
+    clear_file(vis_path, '.png')
+    print "Clear File"
+    bsCoeff = load_bsCoeff(bs_path)
 
-        lib.plot.plot('train disc cost', _disc_cost)
-        lib.plot.plot('time', time.time() - start_time)
+    with tf.device(device_gpu):
+        weights = init_weights()
+        biases = init_biases()
+        cp_batch = load_data(record_path, n_epoch, BATCH_SIZE, tuple(shape_size))
+        gen_train_op, disc_train_op, g_loss, d_loss, real_conf, fake_conf, fake_cp, fimg, merge_no_img = build_graph(cp_batch)
+        merged_all = tf.summary.merge_all()     
+        print "Finish Building Graph"
 
-        # Calculate inception score every 1K iters
-        if iteration % 1000 == 999:
-            inception_score = get_inception_score()
-            lib.plot.plot('inception score', inception_score[0])
+    with tf.Session(config=config) as sess:
+        init_op = tf.local_variables_initializer()
+        sess.run(init_op)
+        sess.run(tf.global_variables_initializer())
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        summary_writer = tf.summary.FileWriter(log_path, sess.graph)
 
-        # Calculate dev loss and generate samples every 100 iters
-        if iteration % 100 == 99:
-            dev_disc_costs = []
-            for images,_ in dev_gen():
-                _dev_disc_cost = session.run(disc_cost, feed_dict={real_data_int: images}) 
-                dev_disc_costs.append(_dev_disc_cost)
-            lib.plot.plot('dev disc cost', np.mean(dev_disc_costs))
-            generate_image(iteration, _data)
+        print "Finish Init and Start Training Step"
 
-        # Save logs every 100 iters
-        if (iteration < 5) or (iteration % 100 == 99):
-            lib.plot.flush()
+        if resume:
+            print("Load existing model " + "!"*10)
+            saver = tf.train.Saver()
+            saver.restore(sess, model_file_name)
 
-        lib.plot.tick()
+        saver = tf.train.Saver(max_to_keep=None)
+
+        for iteration in xrange(ITERS):
+            start_time = time.time()
+            # Train generator
+            if iteration > 0:
+                sess.run(gen_train_op)
+                print "training g, fake_conf %r g_loss %r" % (sess.run(fake_conf), sess.run(g_loss))
+            # Train critic
+            disc_iters = CRITIC_ITERS
+            for i in xrange(disc_iters):
+                sess.run(disc_train_op)
+                # print "d_critic: %r of total %r real_conf %r, d_loss %r" % (i+1, 
+                #     disc_iters, sess.run(real_conf), sess.run(d_loss))
+
+            print "step: %r of total step %r time: %r" % (iteration+1, ITERS, time.time() - start_time)
+
+            fc, rc = sess.run([fake_conf, real_conf])
+            gl, dl = sess.run([g_loss, d_loss])
+            if fc > 0.99 and rc > 0.99:
+                print "g_loss %r, d_loss %r" % (gl, dl)
+            else:
+                print "fake_conf %r g_loss %r, real_conf %r d_loss %r" % (fc, gl, rc, dl)
+            
+            if (iteration % MERGE == MERGE-1) and (iteration % VIS_SAVE != VIS_SAVE-1):
+                merged_no_img = sess.run(merge_no_img)
+                summary_writer.add_summary(merged_no_img, iteration+1)
+
+            if iteration % VIS_SAVE == VIS_SAVE-1:
+                with tf.device(device_cpu):
+                    fcp = sess.run(fake_cp)
+                    fcp = np.reshape(fcp, (BATCH_SIZE,-1,3))
+                    fvimg = vis_image(bsCoeff, fcp, iteration+1, 10, vis_path)
+
+                merged = sess.run(merged_all, feed_dict={fimg:fvimg})
+                summary_writer.add_summary(merged, iteration+1)
+
+            if iteration % VIS_SAVE == VIS_SAVE-1:
+                if not os.path.exists(model_path):
+                    os.mkdir(model_path)
+                saver.save(sess, model_path+model_file_name+".ckpt", global_step=i)
+                print "saving model of step " + str(i) + "!"*10 
+
+if __name__ == '__main__':
+    main()
