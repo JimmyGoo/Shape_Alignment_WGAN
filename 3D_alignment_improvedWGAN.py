@@ -31,23 +31,39 @@ VIS_SAVE = 2000
 device_gpu = '/gpu:0'
 device_cpu = '/cpu:0'
 
-#######config for skull
-log_path = './log/skull/'
-record_path = './data/tfrecord/skull/'
-model_path = './model/skull/'
-model_file_name = 'model_iwgan_' + str(shape_size[0])
-bs_path = './data/bsCoeff/skull_bsCoeff.mat'
-vis_path = './vis/skull/'
-MODE = 1
+CONFIGURATION = [
+    {
+        'config_name': 'skull_config',
+        'log_path': './log/skull/',
+        'record_path': './data/tfrecord/skull/',
+        'model_path': './model/skull/',
+        'model_file_name': 'model_iwgan_skull' + str(shape_size[0]),
+        'bs_path': './data/bsCoeff/skull_bsCoeff.mat',
+        'vis_path': './vis/skull/',
+        'MODE': 1
+    },
 
-######config for chair
-# log_path = './log/chair/'
-# record_path = './data/tfrecord/chair/'
-# model_path = './model/chair/'
-# model_file_name = 'model_iwgan_chair_' + str(shape_size[0])
-# bs_path = './data/bsCoeff/1_bsCoeff.mat'
-# vis_path = './vis/chair/'
-# MODE = 0
+    {
+        'config_name': 'chair_config',
+        'log_path': './log/chair/',
+        'record_path': './data/tfrecord/chair/',
+        'model_path': './model/chair/',
+        'model_file_name': 'model_iwgan_chair' + str(shape_size[0]),
+        'bs_path': './data/bsCoeff/1_bsCoeff.mat',
+        'vis_path': './vis/chair/',
+        'MODE': 0
+    }
+]
+
+current_config = CONFIGURATION[int(argv[2])]
+
+log_path = current_config['log_path']
+record_path = current_config['record_path']
+model_path = current_config['model_path']
+model_file_name = current_config['model_file_name']
+bs_path = current_config['bs_path']
+vis_path = current_config['vis_path']
+MODE = current_config['MODE']
 
 n_epoch = 5000
 
