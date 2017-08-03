@@ -14,7 +14,7 @@ z_size = 128
 
 learning_rate_gen = 2e-4
 
-learning_rate_dis = 5e-5
+learning_rate_dis = 2e-4
 shape_size = [9,9,9,3]
 
 max_iter_step = 200000

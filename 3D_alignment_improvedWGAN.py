@@ -11,31 +11,43 @@ os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
 
 xavier_init = cly.xavier_initializer()
 
-DIM = 128 # This overfits substantially; you're probably better off with 64
+learning_rate_gen = 2e-4
+learning_rate_dis = 2e-4
+shape_size = [9,9,9,3]
+
 LAMBDA = 10 # Gradient penalty lambda hyperparameter
 CRITIC_ITERS = 5 # How many critic iterations per generator iteration
 BATCH_SIZE = 64 # Batch size
-ITERS = 200000 # How many generator iterations to train for
-OUTPUT_DIM = 3072 # Number of pixels in  (3*9*9*9)
+ITERS = 50000 # How many generator iterations to train for
+OUTPUT_DIM = shape_size[0] * shape_size[1] * shape_size[2] * shape_size[3] # Number of pixels in  (3*9*9*9)
 Z_SIZE = 128
-MERGE = 10
+MERGE = 50
+PRINT = 50
+SAMPLE_RATE = 50
 
-VIS_SAVE = 100
 
-learning_rate_gen = 1e-2
-
-learning_rate_dis = 1e-4
-shape_size = [9,9,9,3]
+VIS_SAVE = 2000
 
 device_gpu = '/gpu:0'
 device_cpu = '/cpu:0'
 
-log_path = './log/chair/iwgan/'
-record_path = './data/tfrecord/'
-model_path = './model/chair/'
+#######config for skull
+log_path = './log/skull/'
+record_path = './data/tfrecord/skull/'
+model_path = './model/skull/'
 model_file_name = 'model_iwgan_' + str(shape_size[0])
-bs_path = './data/bsCoeff/1_bsCoeff.mat'
-vis_path = './vis/iwgan/'
+bs_path = './data/bsCoeff/skull_bsCoeff.mat'
+vis_path = './vis/skull/'
+MODE = 1
+
+######config for chair
+# log_path = './log/chair/'
+# record_path = './data/tfrecord/chair/'
+# model_path = './model/chair/'
+# model_file_name = 'model_iwgan_chair_' + str(shape_size[0])
+# bs_path = './data/bsCoeff/1_bsCoeff.mat'
+# vis_path = './vis/chair/'
+# MODE = 0
 
 n_epoch = 5000
 
@@ -228,8 +240,7 @@ def build_graph(real_cp):
 
     merge_no_img = tf.summary.merge([summary_real_conf,summary_fake_conf,summary_d_z_hist,summary_d_x_hist, g_loss_sum, d_loss_sum])
 
-    return gen_train_op, disc_train_op, gen_cost, disc_cost, d_real_conf, d_fake_conf, fake_cp, fimg, merge_no_img
-
+    return gen_train_op, disc_train_op, gen_cost, disc_cost, d_real_conf, d_fake_conf, real_cp, fake_cp, fimg, merge_no_img
 
 # Train loop
 def main():
@@ -237,17 +248,26 @@ def main():
     config.gpu_options.allow_growth = True
     # config.gpu_options.per_process_gpu_memory_fraction = 0.8
 
-    clear_file(log_path, '.g01')
-    clear_file(vis_path, '.png')
-    print "Clear File"
-    bsCoeff = load_bsCoeff(bs_path)
+    with tf.device(device_cpu):
+        clear_file(log_path, '.g01')
+        clear_file(vis_path, '.png')
+        print "Clear File"
+
+        if MODE == 0:
+            bsCoeff = load_bsCoeff(bs_path)
+        elif MODE == 1:
+            bsCoeff, ocp = load_bsCoeff_cp(bs_path)
+            bsCoeff = sample_skull_points(bsCoeff, SAMPLE_RATE)
 
     with tf.device(device_gpu):
         weights = init_weights()
         biases = init_biases()
-        cp_batch = load_data(record_path, n_epoch, BATCH_SIZE, tuple(shape_size))
-        gen_train_op, disc_train_op, g_loss, d_loss, real_conf, fake_conf, fake_cp, fimg, merge_no_img = build_graph(cp_batch)
-        merged_all = tf.summary.merge_all()     
+        #displacement field
+        cp_batch = load_data(record_path, n_epoch, BATCH_SIZE, tuple(shape_size), MODE)
+        gen_train_op, disc_train_op, g_loss, d_loss, real_conf, fake_conf, real_cp, fake_cp, fimg, merge_no_img = build_graph(cp_batch)
+        merged_all = tf.summary.merge_all()
+        rimg = tf.placeholder(tf.float32)
+        real_img_summary = tf.summary.image('real', rimg, max_outputs=5)
         print "Finish Building Graph"
 
     with tf.Session(config=config) as sess:
@@ -267,27 +287,52 @@ def main():
 
         saver = tf.train.Saver(max_to_keep=None)
 
+        ##Vis real img
+        #"Test Real img"
+        rcp = sess.run(real_cp)
+
+        with tf.device(device_cpu):
+            rcp = np.reshape(rcp, (BATCH_SIZE,-1,3))
+
+            rcp0 = rcp[0]
+            count = 0
+            for r in rcp:
+                if np.all(r == rcp0):
+                    count += 1
+
+            if count > 1:
+                print "data duplicated! count: ", count
+            else:
+                print "data seems good! count: ", count
+
+            if MODE == 0:
+                rvimg = vis_image(bsCoeff, rcp, 0, 5, vis_path)
+            elif MODE == 1:
+                rvimg = vis_image_displacement(bsCoeff, ocp, rcp, 0, 5, vis_path)
+
+        merged = sess.run(real_img_summary, feed_dict={rimg:rvimg})
+        summary_writer.add_summary(merged, 1)
+
         for iteration in xrange(ITERS):
-            start_time = time.time()
             # Train generator
             if iteration > 0:
                 sess.run(gen_train_op)
-                print "training g, fake_conf %r g_loss %r" % (sess.run(fake_conf), sess.run(g_loss))
+                # print "training g, fake_conf %r g_loss %r" % (sess.run(fake_conf), sess.run(g_loss))
             # Train critic
             disc_iters = CRITIC_ITERS
             for i in xrange(disc_iters):
                 sess.run(disc_train_op)
                 # print "d_critic: %r of total %r real_conf %r, d_loss %r" % (i+1, 
                 #     disc_iters, sess.run(real_conf), sess.run(d_loss))
+            if iteration % PRINT == PRINT - 1:
+                print "step: %r of total step %r" % (iteration+1, ITERS)
 
-            print "step: %r of total step %r time: %r" % (iteration+1, ITERS, time.time() - start_time)
-
-            fc, rc = sess.run([fake_conf, real_conf])
-            gl, dl = sess.run([g_loss, d_loss])
-            if fc > 0.99 and rc > 0.99:
-                print "g_loss %r, d_loss %r" % (gl, dl)
-            else:
-                print "fake_conf %r g_loss %r, real_conf %r d_loss %r" % (fc, gl, rc, dl)
+                fc, rc = sess.run([fake_conf, real_conf])
+                gl, dl = sess.run([g_loss, d_loss])
+                if fc > 0.99 and rc > 0.99:
+                    print "g_loss %r, d_loss %r" % (gl, dl)
+                else:
+                    print "fake_conf %r g_loss %r, real_conf %r d_loss %r" % (fc, gl, rc, dl)
             
             if (iteration % MERGE == MERGE-1) and (iteration % VIS_SAVE != VIS_SAVE-1):
                 merged_no_img = sess.run(merge_no_img)
@@ -297,7 +342,10 @@ def main():
                 with tf.device(device_cpu):
                     fcp = sess.run(fake_cp)
                     fcp = np.reshape(fcp, (BATCH_SIZE,-1,3))
-                    fvimg = vis_image(bsCoeff, fcp, iteration+1, 10, vis_path)
+                    if MODE == 0:
+                        fvimg = vis_image(bsCoeff, fcp, iteration+1, 10, vis_path)
+                    elif MODE == 1:
+                        fvimg = vis_image_displacement(bsCoeff, ocp, fcp, iteration+1, 10, vis_path)
 
                 merged = sess.run(merged_all, feed_dict={fimg:fvimg})
                 summary_writer.add_summary(merged, iteration+1)
@@ -305,8 +353,10 @@ def main():
             if iteration % VIS_SAVE == VIS_SAVE-1:
                 if not os.path.exists(model_path):
                     os.mkdir(model_path)
-                saver.save(sess, model_path+model_file_name+".ckpt", global_step=i)
-                print "saving model of step " + str(i) + "!"*10 
+                saver.save(sess, model_path+model_file_name+".ckpt", global_step=iteration + 1)
+                print "saving model of step " + str(iteration + 1) + "!"*10
+
+        coord.join(threads)
 
 if __name__ == '__main__':
     main()

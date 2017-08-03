@@ -12,7 +12,7 @@ xavier_init = cly.xavier_initializer()
 batch_size = 64
 z_size = 32
 
-learning_rate_gen = 0.0025
+learning_rate_gen = 2e-4
 
 learning_rate_dis = 2e-4
 shape_size = [9,9,9,3]
