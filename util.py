@@ -30,15 +30,70 @@ def read_and_decode(queue, size):
 	shape = tf.cast(shape, tf.float32)
 	return shape
 
-def load_data(record_path, n_epoch, batch_size, shape_size):
+def read_and_decode_dis(queue, size):
+	reader = tf.TFRecordReader()
+	_, serialized_example = reader.read(queue)
+	# get feature from serialized example
+	# decode
+	features = tf.parse_single_example(
+		serialized_example,
+		features={
+			'disCP': tf.FixedLenFeature([], tf.string)
+		}
+	)
+	shape = features['disCP']
+	shape = tf.decode_raw(shape, tf.float64)
+	shape = tf.reshape(shape, size)
+	shape = tf.cast(shape, tf.float32)
+	return shape
+
+def load_data(record_path, n_epoch, batch_size, shape_size, mode):
 	filenames = [record_path + name for name in os.listdir(record_path) if name != '.DS_Store']
 	print "loading tfrecord: ", filenames
 	filename_queue = tf.train.string_input_producer(filenames, num_epochs=None)
-	shape = read_and_decode(filename_queue, shape_size)
+	if mode == 0:
+		shape = read_and_decode(filename_queue, shape_size)
+	elif mode == 1:
+		shape = read_and_decode_dis(filename_queue, shape_size)
+	else:
+		print 'invalid mode in load_data'
 	shape_batch = tf.train.batch([shape], batch_size=batch_size)
 	return shape_batch
 
+
+def load_test_data(test_path, shape_size, mode, sess):
+	filenames = [test_path + name for name in os.listdir(test_path) if name != '.DS_Store']
+	print "loading test: ", filenames
+	filename_queue = tf.train.string_input_producer(filenames)
+	if mode == 0:
+		shape = read_and_decode(filename_queue, shape_size)
+	elif mode == 1:
+		shape = read_and_decode_dis(filename_queue, shape_size)
+	else:
+		print 'invalid mode in load_data'
+	init_op = tf.initialize_lo_variables()
+   	sess.run(init_op)
+   	coord = tf.train.Coordinator()
+   	threads = tf.train.start_queue_runners(coord=coord)
+   	count = 0
+   	test_shape = []
+   	try:
+     	while True:
+       		example = sess.run([shape])
+       		test_shape.append(example)
+
+   	except tf.errors.OutOfRangeError, e:
+     	coord.request_stop(e)
+   	finally:
+   		coord.request_stop()
+   		coord.join(threads)
+   	return np.array(test_shape)
+
 def clear_file(path, suffix):
+	if not os.path.exists(path):
+		os.mkdir(path)
+		return
+		
 	for f in os.listdir(path):
 		if f[-4:] == suffix:
 			name = path + f
@@ -53,10 +108,21 @@ def load_bsCoeff(path):
 
 	return bs
 
-def vis_image(bsCoeff, CP_batch, step, vis_path=None):
+def load_bsCoeff_cp(path):
+	mat = sio.loadmat(path)
+		
+	bs = np.array(mat['bsCoeff'])
+	bs = np.array([np.reshape(np.array(b[0]), len(b[0])) for b in bs])
+	cp = np.array(mat['orgCP'])
+	cp = np.transpose(cp)
+	return bs, cp
+
+def vis_image(bsCoeff, CP_batch, step, outputs=64, vis_path=None, real=False):
+	print "visualizing of step:", step
+
 	images_raw = np.array([np.matmul(bsCoeff, cp) for cp in CP_batch])
 
-	images = [plot_to_image(i) for i in images_raw]
+	images = [plot_to_image(i, real) for i in images_raw]
 
 	if vis_path != None:
 		###create combine thumbnail
@@ -69,18 +135,49 @@ def vis_image(bsCoeff, CP_batch, step, vis_path=None):
 				img.thumbnail(thumb_size)
 				new_im.paste(img, (i*thumb_size[0],j*thumb_size[1])) 
 		new_im.save(vis_path + str(step) + '.png')
-	return images
+	return images[:outputs]
 
-def plot_to_image(image):
+
+def vis_image_displacement(bsCoeff, ocp, dis_batch, step, outputs=64, vis_path=None, real=False):
+	print "visualizing of step:", step
+
+	images_raw = np.array([np.matmul(bsCoeff, cp + ocp) for cp in dis_batch])
+
+	images = [plot_to_image(i, real) for i in images_raw]
+
+	if vis_path != None:
+		###create combine thumbnail
+		length = 8
+		thumb_size = (256,256)
+		new_im = Image.new('RGB', (thumb_size[0] * length, thumb_size[1] * length))
+		for i in range(length):
+			for j in range(length):
+				img = Image.fromarray(images[8*i+j])
+				img.thumbnail(thumb_size)
+				new_im.paste(img, (i*thumb_size[0],j*thumb_size[1])) 
+		new_im.save(vis_path + str(step) + '.png')
+	return images[:outputs]
+
+def plot_to_image(image, real):
 	fig = Figure()
 	canvas = FigureCanvas(fig)
 	ax = Axes3D(fig)
-	ax.scatter(image[:,0],image[:,1],image[:,2],c='r')
+	if real:
+		ax.scatter(image[:,0],image[:,1],image[:,2],c='g')
+	else:
+		ax.scatter(image[:,0],image[:,1],image[:,2],c='r')
+
 	canvas.draw()
 	img = np.fromstring(canvas.tostring_rgb(), dtype='uint8')
 	width, height = (fig.get_size_inches() * fig.get_dpi())
 	img = np.reshape(img, (int(height),int(width),3))
 	return img
 
-
+def sample_skull_points(bsCoeff,sample_rate):
+	if sample_rate == 1:
+		return bsCoeff
+		
+	length = len(bsCoeff)
+	sample_idx = [int(i*sample_rate) for i in range(int(length / sample_rate))]
+	return bsCoeff[sample_idx]
 
