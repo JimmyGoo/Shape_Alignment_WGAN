@@ -8,18 +8,16 @@ from model import *
 
 os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
 
-xavier_init = cly.xavier_initializer()
-
-learning_rate_gen = 2e-4
-learning_rate_dis = 2e-4
-shape_size = [9,9,9,3]
+LEARNING_RATE_GEN = 2e-4
+LEARNING_RATE_DIS = 2e-4
+SHAPE_SIZE = [9,9,9,3]
 
 LAMBDA = 10 # Gradient penalty lambda hyperparameter
 CRITIC_ITERS = 5 # How many critic iterations per generator iteration
 BATCH_SIZE = 64 # Batch size
-ITERS = 20000 # How many generator iterations to train for
-OUTPUT_DIM = shape_size[0] * shape_size[1] * shape_size[2] * shape_size[3] # Number of pixels in  (3*9*9*9)
-Z_SIZE = 20
+ITERS = 200000 # How many generator iterations to train for
+OUTPUT_DIM = SHAPE_SIZE[0] * SHAPE_SIZE[1] * SHAPE_SIZE[2] * SHAPE_SIZE[3] # Number of pixels in  (3*9*9*9)
+Z_SIZE = 40
 MERGE = 50
 PRINT = 50
 
@@ -34,7 +32,7 @@ CONFIGURATION = [
         'log_path': './log/skull_' + str(Z_SIZE) + '/',
         'record_path': './data/tfrecord/skull/',
         'model_path': './model/skull/',
-        'model_file_name': 'model_iwgan_skull_' + str(Z_SIZE) + '_' + str(shape_size[0]),
+        'model_file_name': 'model_iwgan_skull_' + str(Z_SIZE),
         'bs_path': './data/bsCoeff/skull_bsCoeff.mat',
         'vis_path': './vis/skull_' + str(Z_SIZE) + '/',
         'SAMPLE_RATE': 100,
@@ -43,12 +41,12 @@ CONFIGURATION = [
 
     {
         'config_name': 'chair_config',
-        'log_path': './log/chair/',
+        'log_path': './log/chair_' + str(Z_SIZE) + '/',
         'record_path': './data/tfrecord/chair/',
         'model_path': './model/chair/',
-        'model_file_name': 'model_iwgan_chair' + str(shape_size[0]),
+        'model_file_name': 'model_iwgan_chair_' + str(Z_SIZE),
         'bs_path': './data/bsCoeff/chair_bsCoeff.mat',
-        'vis_path': './vis/chair/',
+        'vis_path': './vis/chair_' + str(Z_SIZE) + '/',
         'SAMPLE_RATE': 1,
         'MODE': 1
     }
@@ -86,8 +84,8 @@ def build_graph(real_cp):
     real_cp = tf.reshape(real_cp, [BATCH_SIZE, OUTPUT_DIM])
     fake_cp = Generator(BATCH_SIZE, output_shape, Z_SIZE)
 
-    disc_real = Discriminator(real_cp, output_shape)
-    disc_fake = Discriminator(fake_cp, output_shape ,reuse=True)
+    disc_real = Discriminator(real_cp, filter_num_d, output_shape, BATCH_SIZE)
+    disc_fake = Discriminator(fake_cp, filter_num_d, output_shape, BATCH_SIZE, reuse=True)
 
     g_params = tf.get_collection(
         tf.GraphKeys.TRAINABLE_VARIABLES, scope="generator")
@@ -101,8 +99,9 @@ def build_graph(real_cp):
     print "true logit shape: ", disc_real.shape
     print "fake logit shape: ", disc_fake.shape
 
-    d_real_conf = tf.divide(tf.reduce_sum(tf.maximum(tf.minimum(disc_real, 0.99), 0.01)), BATCH_SIZE)
-    d_fake_conf = tf.divide(tf.reduce_sum(tf.maximum(tf.minimum(disc_fake, 0.99), 0.01)), BATCH_SIZE)
+
+    d_real_conf = tf.reduce_mean(tf.sigmoid(disc_real))
+    d_fake_conf = tf.reduce_mean(tf.sigmoid(disc_fake))
 
     summary_real_conf = tf.summary.scalar("real_conf", d_real_conf)
     summary_fake_conf = tf.summary.scalar("fake_conf", d_fake_conf)
@@ -130,13 +129,13 @@ def build_graph(real_cp):
 
     differences = fake_cp - real_cp
     interpolates = real_cp + (alpha*differences)
-    gradients = tf.gradients(Discriminator(interpolates, reuse=True), [interpolates])[0]
+    gradients = tf.gradients(Discriminator(interpolates, filter_num_d, output_shape, BATCH_SIZE,  reuse=True), [interpolates])[0]
     slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1]))
     gradient_penalty = tf.reduce_mean((slopes-1.)**2)
     disc_cost += LAMBDA*gradient_penalty
 
-    gen_train_op = tf.train.AdamOptimizer(learning_rate=learning_rate_gen, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=g_params)
-    disc_train_op = tf.train.AdamOptimizer(learning_rate=learning_rate_dis, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=d_params)
+    gen_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_GEN, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=g_params)
+    disc_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_DIS, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=d_params)
 
     merge_no_img = tf.summary.merge([summary_real_conf,summary_fake_conf,summary_d_z_hist,summary_d_x_hist, g_loss_sum, d_loss_sum])
 
@@ -165,7 +164,7 @@ def main():
         weights = init_weights(filter_num_d, output_shape, Z_SIZE)
         biases = init_biases(filter_num_d, output_shape)
         #displacement field
-        cp_batch = load_data(record_path, n_epoch, BATCH_SIZE, tuple(shape_size), MODE)
+        cp_batch = load_data(record_path, n_epoch, BATCH_SIZE, tuple(SHAPE_SIZE), MODE)
         gen_train_op, disc_train_op, g_loss, d_loss, real_conf, fake_conf, real_cp, fake_cp, fimg, merge_no_img = build_graph(cp_batch)
         merged_all = tf.summary.merge_all()
         rimg = tf.placeholder(tf.float32)

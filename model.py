@@ -77,10 +77,12 @@ def Generator(n_samples, output_shape, Z_SIZE, phase_train=True, noise=None, reu
         output = tf.reshape(g4, [-1, OUTPUT_DIM])
     return output
 
-def Discriminator(inputs, output_shape, phase_train=True, reuse=False):
+def Discriminator(inputs, filter_num_d, output_shape, batch_size, phase_train=True, reuse=False):
 
     stride_d = [2,2,2]
     kernel_d = [4,4,4]
+
+    xavier_init = tf.contrib.layers.xavier_initializer()
    
     with tf.variable_scope("discriminator") as scope:
         if reuse:
@@ -110,7 +112,7 @@ def Discriminator(inputs, output_shape, phase_train=True, reuse=False):
         print "d3 shape: ", d3.shape
 
         d4 = cly.fully_connected(tf.reshape(
-            d3, [BATCH_SIZE, -1]), 1, activation_fn=None)
+            d3, [batch_size, -1]), 1, activation_fn=None)
         d4 = tf.reshape(d4, [-1])
 
         print "d4 shape: ", d4.shape
