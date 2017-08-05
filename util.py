@@ -62,32 +62,32 @@ def load_data(record_path, n_epoch, batch_size, shape_size, mode):
 
 
 def load_test_data(test_path, shape_size, mode, sess):
-	filenames = [test_path + name for name in os.listdir(test_path) if name != '.DS_Store']
-	print "loading test: ", filenames
-	filename_queue = tf.train.string_input_producer(filenames)
+	filename = [test_path + name for name in os.listdir(test_path) if name != '.DS_Store']
+	print "loading test: ", filename
+	filename_queue = tf.train.string_input_producer(filename)
 	if mode == 0:
 		shape = read_and_decode(filename_queue, shape_size)
 	elif mode == 1:
 		shape = read_and_decode_dis(filename_queue, shape_size)
 	else:
 		print 'invalid mode in load_data'
-	init_op = tf.initialize_lo_variables()
-   	sess.run(init_op)
-   	coord = tf.train.Coordinator()
-   	threads = tf.train.start_queue_runners(coord=coord)
-   	count = 0
-   	test_shape = []
-   	try:
-     	while True:
-       		example = sess.run([shape])
-       		test_shape.append(example)
+	init_op = tf.initialize_local_variables()
+	sess.run(init_op)
+	coord = tf.train.Coordinator()
+	threads = tf.train.start_queue_runners(coord=coord)
+	count = 0
+	test_shape = []
+	record_num = np.sum([1 for s in tf.python_io.tf_record_iterator(filename[0])])
 
-   	except tf.errors.OutOfRangeError, e:
-     	coord.request_stop(e)
-   	finally:
-   		coord.request_stop()
-   		coord.join(threads)
-   	return np.array(test_shape)
+	for i in range(record_num):
+		example = sess.run(shape)
+		test_shape.append(example)
+		count += 1
+
+	coord.request_stop()
+	coord.join(threads)
+	print "test size: ", count
+	return np.array(test_shape)
 
 def clear_file(path, suffix):
 	if not os.path.exists(path):
