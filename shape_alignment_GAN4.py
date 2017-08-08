@@ -10,6 +10,8 @@ os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
 
 LEARNING_RATE_GEN = 2e-4
 LEARNING_RATE_DIS = 2e-4
+BETA1 = 0
+BETA2 = 0.9
 SHAPE_SIZE = [9,9,9,3]
 
 BATCH_SIZE = 128 # Batch size
@@ -114,8 +116,8 @@ def build_graph(real_cp):
 	g_loss_sum = tf.summary.scalar("g_loss", g_loss)
 	d_loss_sum = tf.summary.scalar("d_loss", d_loss)
 
-	gen_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_GEN, beta1=0.5, beta2=0.9).minimize(g_loss, var_list=g_params)
-	disc_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_DIS, beta1=0.5, beta2=0.9).minimize(d_loss, var_list=d_params)
+	gen_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_GEN, beta1=BETA1, beta2=BETA2).minimize(g_loss, var_list=g_params)
+	disc_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_DIS, beta1=BETA1, beta2=BETA2).minimize(d_loss, var_list=d_params)
 
 	merge_no_img = tf.summary.merge([summary_real_conf,summary_fake_conf,summary_d_z_hist,summary_d_x_hist, g_loss_sum, d_loss_sum])
 
@@ -198,13 +200,14 @@ def main():
 
 		for iteration in xrange(ITERS):
 
-			sess.run(disc_train_op)
+			if sess.run(real_conf) < 0.95:
+				sess.run(disc_train_op)
 
 			if sess.run(fake_conf) < 0.5 and sess.run(real_conf) > 0.8:
 				for j in range(G_EXTRA_STEP):
 					sess.run([gen_train_op])
 			else:
-				sess.run([gen_train_op])
+				sess.run(gen_train_op)
    
 			if iteration % PRINT == PRINT - 1:
 				print "step: %r of total step %r" % (iteration+1, ITERS)

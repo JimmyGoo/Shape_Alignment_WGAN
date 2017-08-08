@@ -138,7 +138,7 @@ def vis_image_displacement(bsCoeff, ocp, dis_batch, step, real=False):
 
 def save_vis_image(images, step, save_path, length, length2, thumb_size=(256,256)):
 	###create combine thumbnail
-	new_im = Image.new('RGB', (thumb_size[0] * length, thumb_size[1] * length2))
+	new_im = Image.new('RGB', (int(thumb_size[0] * length), int(thumb_size[1] * length2)))
 	for i in range(length):
 		for j in range(length2):
 			img = Image.fromarray(images[8*i+j])

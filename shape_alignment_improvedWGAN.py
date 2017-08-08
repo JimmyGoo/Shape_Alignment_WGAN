@@ -8,8 +8,10 @@ from model import *
 
 os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
 
-LEARNING_RATE_GEN = 2e-4
-LEARNING_RATE_DIS = 2e-4
+LEARNING_RATE_GEN = 0.0001
+LEARNING_RATE_DIS = 0.0001
+BETA1 = 0
+BETA2 = 0.9
 SHAPE_SIZE = [9,9,9,3]
 
 LAMBDA = 10 # Gradient penalty lambda hyperparameter
@@ -173,8 +175,8 @@ def build_graph(real_cp):
     gradient_penalty = tf.reduce_mean((slopes-1.)**2)
     disc_cost += LAMBDA*gradient_penalty
 
-    gen_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_GEN, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=g_params)
-    disc_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_DIS, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=d_params)
+    gen_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_GEN, beta1=BETA1, beta2=BETA2).minimize(gen_cost, var_list=g_params)
+    disc_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_DIS, beta1=BETA1, beta2=BETA2).minimize(disc_cost, var_list=d_params)
 
     merge_no_img = tf.summary.merge([summary_real_conf,summary_fake_conf,summary_d_z_hist,summary_d_x_hist, g_loss_sum, d_loss_sum])
 
@@ -251,7 +253,7 @@ def main():
                 rvimg = vis_image(bsCoeff, rcp, 0, True)
             elif MODE == 1:
                 rvimg = vis_image_displacement(bsCoeff, ocp, rcp, 0, True)
-                save_vis_image(rvimg, 0, 8, 8, vis_path)
+                save_vis_image(rvimg, 0, vis_path, 8, 8)
 
         merged = sess.run(real_img_summary, feed_dict={rimg:rvimg[:6]})
         summary_writer.add_summary(merged, 1)
