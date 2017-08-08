@@ -21,7 +21,8 @@ Z_SIZE = 40
 MERGE = 50
 PRINT = 50
 
-VIS_SAVE = 2000
+VIS_SHOW = 2000
+VIS_SAVE = 10000
 
 device_gpu = '/gpu:0'
 device_cpu = '/cpu:0'
@@ -48,8 +49,35 @@ CONFIGURATION = [
         'bs_path': './data/bsCoeff/chair_bsCoeff.mat',
         'vis_path': './vis/chair_' + str(Z_SIZE) + '/',
         'SAMPLE_RATE': 1,
-        'MODE': 1
-    }
+        'MODE': 1,
+        'REGULARIZE': False
+    },
+
+    {
+        'config_name': 'chair_config_regular',
+        'log_path': './log/chair_' + str(Z_SIZE) + '/',
+        'record_path': './data/tfrecord/chair/',
+        'model_path': './model/chair/',
+        'model_file_name': 'model_iwgan_chair_regular' + str(Z_SIZE),
+        'bs_path': './data/bsCoeff/chair_bsCoeff.mat',
+        'vis_path': './vis/chair_' + str(Z_SIZE) + '_regular/',
+        'SAMPLE_RATE': 1,
+        'MODE': 1,
+        'REGULARIZE': True
+    },
+
+    {
+        'config_name': 'chair_config_lz',
+        'log_path': './log/chair_lz_' + str(Z_SIZE) + '/',
+        'record_path': './data/tfrecord/chair_lz/',
+        'model_path': './model/chair/',
+        'model_file_name': 'model_iwgan_chair_lz_' + str(Z_SIZE),
+        'bs_path': './data/bsCoeff/chair_lz_bsCoeff.mat',
+        'vis_path': './vis/chair_' + str(Z_SIZE) + '_lz/',
+        'SAMPLE_RATE': 1,
+        'MODE': 1,
+        'REGULARIZE': False
+    },
 ]
 
 current_config = CONFIGURATION[int(argv[2])]
@@ -78,7 +106,10 @@ output_shape = {
 
 n_epoch = 100000
 
-resume = False
+RESUME = False
+REGULARIZE = current_config['REGULARIZE']
+REG_LAMDA = 0.0001
+REG_LIMIT = 5
 
 def build_graph(real_cp):
     real_cp = tf.reshape(real_cp, [BATCH_SIZE, OUTPUT_DIM])
@@ -93,12 +124,20 @@ def build_graph(real_cp):
         tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator")
 
     # Standard WGAN loss
-    gen_cost = -tf.reduce_mean(disc_fake)
+    reg_loss = tf.constant(0)
+    if REGULARIZE:
+        l2 = tf.nn.l2_loss(fake_cp)
+        reg_loss = REG_LAMDA * l2
+        reg_loss = tf.minimum(tf.cast(REG_LIMIT, tf.float32), reg_loss)
+        gen_cost = -tf.reduce_mean(disc_fake) - reg_loss
+        reg_loss_sum = tf.summary.scalar("g_loss_reg", reg_loss)
+    else:
+        gen_cost = -tf.reduce_mean(disc_fake)
+
     disc_cost = tf.reduce_mean(disc_fake) - tf.reduce_mean(disc_real)
 
     print "true logit shape: ", disc_real.shape
     print "fake logit shape: ", disc_fake.shape
-
 
     d_real_conf = tf.reduce_mean(tf.sigmoid(disc_real))
     d_fake_conf = tf.reduce_mean(tf.sigmoid(disc_fake))
@@ -139,7 +178,7 @@ def build_graph(real_cp):
 
     merge_no_img = tf.summary.merge([summary_real_conf,summary_fake_conf,summary_d_z_hist,summary_d_x_hist, g_loss_sum, d_loss_sum])
 
-    return gen_train_op, disc_train_op, gen_cost, disc_cost, d_real_conf, d_fake_conf, real_cp, fake_cp, fimg, merge_no_img
+    return gen_train_op, disc_train_op, gen_cost, reg_loss, disc_cost, d_real_conf, d_fake_conf, fake_cp, fimg, merge_no_img
 
 # Train loop
 def main():
@@ -165,7 +204,7 @@ def main():
         biases = init_biases(filter_num_d, output_shape)
         #displacement field
         cp_batch = load_data(record_path, n_epoch, BATCH_SIZE, tuple(SHAPE_SIZE), MODE)
-        gen_train_op, disc_train_op, g_loss, d_loss, real_conf, fake_conf, real_cp, fake_cp, fimg, merge_no_img = build_graph(cp_batch)
+        gen_train_op, disc_train_op, g_loss, reg_loss, d_loss, real_conf, fake_conf, fake_cp, fimg, merge_no_img = build_graph(cp_batch)
         merged_all = tf.summary.merge_all()
         rimg = tf.placeholder(tf.float32)
         real_img_summary = tf.summary.image('real', rimg, max_outputs=5)
@@ -181,7 +220,7 @@ def main():
 
         print "Finish Init and Start Training Step"
 
-        if resume:
+        if RESUME:
             print("Load existing model " + "!"*10)
             saver = tf.train.Saver()
             saver.restore(sess, model_file_name)
@@ -190,7 +229,7 @@ def main():
 
         ##Vis real img
         #"Test Real img"
-        rcp = sess.run(real_cp)
+        rcp = sess.run(cp_batch)
 
         with tf.device(device_cpu):
             rcp = np.reshape(rcp, (BATCH_SIZE,-1,3))
@@ -207,11 +246,12 @@ def main():
                 print "data seems good! count: ", count
 
             if MODE == 0:
-                rvimg = vis_image(bsCoeff, rcp, 0, 5, vis_path, True)
+                rvimg = vis_image(bsCoeff, rcp, 0, True)
             elif MODE == 1:
-                rvimg = vis_image_displacement(bsCoeff, ocp, rcp, 0, 5, vis_path, True)
+                rvimg = vis_image_displacement(bsCoeff, ocp, rcp, 0, True)
+                save_vis_image(rvimg, 0, vis_path)
 
-        merged = sess.run(real_img_summary, feed_dict={rimg:rvimg})
+        merged = sess.run(real_img_summary, feed_dict={rimg:rvimg[:5]})
         summary_writer.add_summary(merged, 1)
 
         for iteration in xrange(ITERS):
@@ -232,26 +272,30 @@ def main():
                 print "step: %r of total step %r" % (iteration+1, ITERS)
 
                 fc, rc = sess.run([fake_conf, real_conf])
-                gl, dl = sess.run([g_loss, d_loss])
-                if fc > 0.99 and rc > 0.99:
-                    print "g_loss %r, d_loss %r" % (gl, dl)
+                if REGULARIZE:
+                    gl, rl, dl = sess.run([g_loss, reg_loss, d_loss])
+                    print "fake_conf %r g_loss %r reg_loss %r, real_conf %r d_loss %r" % (fc, gl, rl, rc, dl)
                 else:
+                    gl, dl = sess.run([g_loss, d_loss])
                     print "fake_conf %r g_loss %r, real_conf %r d_loss %r" % (fc, gl, rc, dl)
             
             if (iteration % MERGE == MERGE-1) and (iteration % VIS_SAVE != VIS_SAVE-1):
                 merged_no_img = sess.run(merge_no_img)
                 summary_writer.add_summary(merged_no_img, iteration+1)
 
-            if iteration % VIS_SAVE == VIS_SAVE-1:
+            if iteration % VIS_SHOW == VIS_SHOW-1:
                 with tf.device(device_cpu):
                     fcp = sess.run(fake_cp)
                     fcp = np.reshape(fcp, (BATCH_SIZE,-1,3))
                     if MODE == 0:
-                        fvimg = vis_image(bsCoeff, fcp, iteration+1, 10, vis_path)
+                        fvimg = vis_image(bsCoeff, fcp, iteration+1)
                     elif MODE == 1:
-                        fvimg = vis_image_displacement(bsCoeff, ocp, fcp, iteration+1, 10, vis_path)
+                        fvimg = vis_image_displacement(bsCoeff, ocp, fcp, iteration+1)
 
-                merged = sess.run(merged_all, feed_dict={fimg:fvimg})
+                    if iteration % VIS_SAVE == VIS_SAVE-1:
+                        save_vis_image(fvimg, iteration+1, vis_path)
+
+                merged = sess.run(merged_all, feed_dict={fimg:fvimg[:10]})
                 summary_writer.add_summary(merged, iteration+1)
 
             if iteration % VIS_SAVE == VIS_SAVE-1:

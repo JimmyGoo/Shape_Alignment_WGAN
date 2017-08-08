@@ -7,16 +7,16 @@ import numpy as np
 size = [9,9,9,3]
 valid = True
 
-def generate_chair(file_path, record_path):
+def generate_chair(file_path, record_path, record_name):
 	path = file_path
 	if path[len(path) - 1] != '/':
 		path += '/'
 
 	counter = 0
-	name = path.split('/')[-2]
 
-	record = record_path + name + '.tfrecords'
+	record = record_path + record_name + '.tfrecords'
 	writer = tf.python_io.TFRecordWriter(record)
+	print "generating: ", record
 
 	for name in os.listdir(path):
 		if name == '.DS_Store':
@@ -26,7 +26,6 @@ def generate_chair(file_path, record_path):
 		
 		curCP = np.array(mat['disCP'])
 		curCP = np.transpose(curCP)
-		print curCP.shape
 		curCP = np.reshape(curCP, size)
 		curCP_raw = curCP.tobytes()
 		example = tf.train.Example(features=tf.train.Features(feature={
@@ -35,13 +34,14 @@ def generate_chair(file_path, record_path):
 
 		writer.write(example.SerializeToString())
 		counter += 1
+		if counter % 100 == 0:
+			print "record count: ", counter
 
 	writer.close()
 	print "finish writing tfrecord file: %r, len %r" % (record, counter)
 
 
-def generate_skull(filename, record_path):
-	name = 'skull'
+def generate_skull(filename, record_path, name='skull'):
 	record = record_path + name + '.tfrecords'
 	writer = tf.python_io.TFRecordWriter(record)
 	record_t = record_path + name + '_test.tfrecords'
@@ -75,11 +75,12 @@ def generate_skull(filename, record_path):
 	print "finish writing tfrecord file: %r, train len %r, test len %r" % (record, counter, counter_t)
 
 if __name__ == "__main__":
-	if argv[3] == str(0):
-		generate_chair(argv[1], argv[2])
+	with tf.device('/cpu:0'):
+		if argv[4] == str(0):
+			generate_chair(argv[1], argv[2], argv[3])
 
-	elif argv[3] == str(1):
-		generate_skull(argv[1], argv[2])
+		elif argv[4] == str(1):
+			generate_skull(argv[1], argv[2], argv[3])
 
-	else:
-		print 'invalid argu3'
+		else:
+			print 'invalid argu3'

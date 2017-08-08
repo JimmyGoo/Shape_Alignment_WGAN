@@ -117,46 +117,35 @@ def load_bsCoeff_cp(path):
 	cp = np.transpose(cp)
 	return bs, cp
 
-def vis_image(bsCoeff, CP_batch, step, outputs=64, vis_path=None, real=False):
+def vis_image(bsCoeff, CP_batch, step, real=False):
 	print "visualizing of step:", step
 
 	images_raw = np.array([np.matmul(bsCoeff, cp) for cp in CP_batch])
 
 	images = [plot_to_image(i, real) for i in images_raw]
 
-	if vis_path != None:
-		###create combine thumbnail
-		length = 8
-		thumb_size = (256,256)
-		new_im = Image.new('RGB', (thumb_size[0] * length, thumb_size[1] * length))
-		for i in range(length):
-			for j in range(length):
-				img = Image.fromarray(images[8*i+j])
-				img.thumbnail(thumb_size)
-				new_im.paste(img, (i*thumb_size[0],j*thumb_size[1])) 
-		new_im.save(vis_path + str(step) + '.png')
-	return images[:outputs]
+	return images
 
 
-def vis_image_displacement(bsCoeff, ocp, dis_batch, step, outputs=64, vis_path=None, real=False):
+def vis_image_displacement(bsCoeff, ocp, dis_batch, step, real=False):
 	print "visualizing of step:", step
 
 	images_raw = np.array([np.matmul(bsCoeff, cp + ocp) for cp in dis_batch])
 
 	images = [plot_to_image(i, real) for i in images_raw]
 
-	if vis_path != None:
-		###create combine thumbnail
-		length = 8
-		thumb_size = (256,256)
-		new_im = Image.new('RGB', (thumb_size[0] * length, thumb_size[1] * length))
-		for i in range(length):
-			for j in range(length):
-				img = Image.fromarray(images[8*i+j])
-				img.thumbnail(thumb_size)
-				new_im.paste(img, (i*thumb_size[0],j*thumb_size[1])) 
-		new_im.save(vis_path + str(step) + '.png')
-	return images[:outputs]
+	return images
+
+def save_vis_image(images, step, save_path, thumb_size=(256,256)):
+	###create combine thumbnail
+	length = 8
+	new_im = Image.new('RGB', (thumb_size[0] * length, thumb_size[1] * length))
+	for i in range(length):
+		for j in range(length):
+			img = Image.fromarray(images[8*i+j])
+			img.thumbnail(thumb_size)
+			new_im.paste(img, (i*thumb_size[0],j*thumb_size[1])) 
+	new_im.save(save_path + str(step) + '.png')
 
 def plot_to_image(image, real):
 	fig = Figure()
