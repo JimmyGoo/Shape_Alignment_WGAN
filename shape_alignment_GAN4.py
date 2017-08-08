@@ -4,40 +4,54 @@ import tensorflow.contrib.layers as cly
 from util import *
 from functools import partial
 from sys import argv
+from model import *
 
 os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
 
-xavier_init = cly.xavier_initializer()
+LEARNING_RATE_GEN = 2e-4
+LEARNING_RATE_DIS = 2e-4
+SHAPE_SIZE = [9,9,9,3]
 
-batch_size = 64
-z_size = 32
+BATCH_SIZE = 128 # Batch size
+ITERS = 100000 # How many generator iterations to train for
+OUTPUT_DIM = SHAPE_SIZE[0] * SHAPE_SIZE[1] * SHAPE_SIZE[2] * SHAPE_SIZE[3] # Number of pixels in  (3*9*9*9)
+Z_SIZE = 40
+MERGE = 50
+PRINT = 50
 
-learning_rate_gen = 2e-4
+D_EXTRA_STEP = 10
+G_EXTRA_STEP = 300
 
-learning_rate_dis = 2e-4
-shape_size = [9,9,9,3]
-
-max_iter_step = 200000
-
-g_extra_step = 100
-d_extra_step = 5
-
-VIS_SAVE = 50
+VIS_SHOW = 2000
+VIS_SAVE = 10000
 
 device_gpu = '/gpu:0'
 device_cpu = '/cpu:0'
 
-log_path = './log/chair/dcgan/'
-record_path = './data/tfrecord/'
-model_path = './model/chair/'
-model_path = './model/chair/'
-model_file_name = 'model_dcgan_' + str(shape_size[0])
-bs_path = './data/bsCoeff/1_bsCoeff.mat'
-vis_path = './vis/'
+CONFIGURATION = [
+	{
+		'config_name': 'chair_config_lz',
+		'log_path': './log/chair_lz_' + str(Z_SIZE) + '_dcgan/',
+		'record_path': './data/tfrecord/chair_lz/',
+		'model_path': './model/chair/',
+		'model_file_name': 'model_dcgan_chair_lz_' + str(Z_SIZE),
+		'bs_path': './data/bsCoeff/chair_lz_bsCoeff.mat',
+		'vis_path': './vis/chair_' + str(Z_SIZE) + '_lz_dcgan/',
+		'SAMPLE_RATE': 1,
+		'MODE': 1,
+		'REGULARIZE': True
+	},
+]
 
-n_epoch = 5000
-
-resume = False
+current_config = CONFIGURATION[int(argv[2])]
+SAMPLE_RATE = current_config['SAMPLE_RATE']
+log_path = current_config['log_path']
+record_path = current_config['record_path']
+model_path = current_config['model_path']
+model_file_name = current_config['model_file_name']
+bs_path = current_config['bs_path']
+vis_path = current_config['vis_path']
+MODE = current_config['MODE']
 
 filter_num_d = {
 	'1':3,
@@ -46,125 +60,31 @@ filter_num_d = {
 	'4':32,
 }
 
-def init_weights():
+output_shape = {
+	'g1':[BATCH_SIZE,2,2,2,filter_num_d['4']],
+	'g2':[BATCH_SIZE,3,3,3,filter_num_d['3']],
+	'g3':[BATCH_SIZE,5,5,5,filter_num_d['2']],
+	'g4':[BATCH_SIZE,9,9,9,filter_num_d['1']]
+}
 
-	global weights
-	weights = {}
-	xavier_init = tf.contrib.layers.xavier_initializer()
+n_epoch = 100000
 
-	# filter for deconv3d: A 5-D Tensor with the same type as value and shape [depth, height, width, output_channels, in_channels]
-	weights['wg1'] = tf.get_variable("wg1", shape=[z_size,2*2*2*filter_num_d['4']], initializer=xavier_init)
-	weights['wg2'] = tf.get_variable("wg2", shape=[4, 4, 4, filter_num_d['3'], filter_num_d['4']], initializer=xavier_init)
-	weights['wg3'] = tf.get_variable("wg3", shape=[4, 4, 4, filter_num_d['2'], filter_num_d['3']], initializer=xavier_init)
-	weights['wg4'] = tf.get_variable("wg4", shape=[4, 4, 4, filter_num_d['1'], filter_num_d['2']], initializer=xavier_init)
-	
-def init_biases():
-	
-	global biases
-	biases = {}
-	zero_init = tf.zeros_initializer()
-
-	biases['bg1'] = tf.get_variable("bg1", shape=[2*2*2*filter_num_d['4']], initializer=zero_init)
-	biases['bg2'] = tf.get_variable("bg2", shape=[filter_num_d['3']], initializer=zero_init)
-	biases['bg3'] = tf.get_variable("bg3", shape=[filter_num_d['2']], initializer=zero_init)
-	biases['bg4'] = tf.get_variable("bg4", shape=[filter_num_d['1']], initializer=zero_init)
-   
-def generator(z, batch_size=batch_size,phase_train=True, reuse=False):
-	strides = [1,2,2,2,1]
-
-	output_shape = {
-		'g1':[batch_size,2,2,2,filter_num_d['4']],
-		'g2':[batch_size,3,3,3,filter_num_d['3']],
-		'g3':[batch_size,5,5,5,filter_num_d['2']],
-		'g4':[batch_size,9,9,9,filter_num_d['1']],
-	}
-
-	with tf.variable_scope("generator") as scope:
-		if reuse:
-			scope.reuse_variables()
-
-		print "z shape: ", z.shape
-		g1 = tf.add(tf.matmul(z, weights['wg1']), biases['bg1'])
-		g1 = tf.reshape(g1, output_shape['g1'])
-		g1 = tf.contrib.layers.batch_norm(g1, is_training=phase_train)
-
-		print "g1 shape: ", g1.shape
-
-		g2 = tf.nn.conv3d_transpose(g1, weights['wg2'], output_shape=output_shape['g2'], strides=strides, padding="SAME")
-		g2 = tf.nn.bias_add(g2, biases['bg2'])
-		g2 = tf.contrib.layers.batch_norm(g2, is_training=phase_train)
-		g2 = tf.nn.relu(g2)
-
-		print "g2 shape: ", g2.shape
-
-		## one layer deeper
-
-		g3 = tf.nn.conv3d_transpose(g2, weights['wg3'], output_shape=output_shape['g3'], strides=strides, padding="SAME")
-		g3 = tf.nn.bias_add(g3, biases['bg3'])
-		g3 = tf.contrib.layers.batch_norm(g3, is_training=phase_train)
-		g3 = tf.nn.relu(g3)
-
-		print "g3 shape: ", g3.shape
-		
-		g4 = tf.nn.conv3d_transpose(g3, weights['wg4'], output_shape=output_shape['g4'], strides=strides, padding="SAME")
-		g4 = tf.nn.bias_add(g4, biases['bg4'])                                   
-		g4 = tf.tanh(g4)
-
-		print "g4 shape: ", g4.shape
-
-	return g4
-
-
-
-def discriminator(inputs, phase_train=True, reuse=False):
-	stride_d = [2,2,2]
-	kernel_d = [4,4,4]
-
-	with tf.variable_scope("discriminator") as scope:
-		if reuse:
-			scope.reuse_variables()
-
-		print "inputs shape: ", inputs.shape
-
-		d1 = ly.conv3d(inputs=inputs, filters=filter_num_d['2'], kernel_size=kernel_d,
-			strides=stride_d, padding="SAME",activation=leaky_relu, activity_regularizer=cly.batch_norm,
-			kernel_initializer=xavier_init)
-
-		print "d1 shape: ", d1.shape
-
-		d2 = ly.conv3d(inputs=d1, filters=filter_num_d['3'], kernel_size=kernel_d,
-			strides=stride_d, padding="SAME",activation=leaky_relu, activity_regularizer=cly.batch_norm,
-			kernel_initializer=xavier_init)
-
-		print "d2 shape: ", d2.shape
-
-		##one layer deeper
-
-		d3 = ly.conv3d(inputs=d2, filters=filter_num_d['4'], kernel_size=kernel_d,
-			strides=stride_d, padding="SAME",activation=leaky_relu, activity_regularizer=cly.batch_norm,
-			kernel_initializer=xavier_init)
-
-		print "d3 shape: ", d3.shape
-
-		d4 = cly.fully_connected(tf.reshape(
-			d3, [batch_size, -1]), 1, activation_fn=None)
-
-		print "d4 shape: ", d4.shape
-
-	return d4
+RESUME = False
+REGULARIZE = current_config['REGULARIZE']
+REG_LAMDA = 0.1
+REG_LIMIT = 1000
 
 def build_graph(real_cp):
+	real_cp = tf.reshape(real_cp, [BATCH_SIZE, OUTPUT_DIM])
+	fake_cp = Generator(BATCH_SIZE, output_shape, Z_SIZE)
 
-	noise_dist = tf.contrib.distributions.Normal(0., 1.)
-	z = noise_dist.sample((batch_size, z_size))
-	gen = generator
-	dis = discriminator
+	true_logit = Discriminator(real_cp, filter_num_d, output_shape, BATCH_SIZE)
+	fake_logit = Discriminator(fake_cp, filter_num_d, output_shape, BATCH_SIZE, reuse=True)
 
-	with tf.variable_scope('generator'):
-		fake_cp = generator(z)
-
-	true_logit = dis(real_cp)
-	fake_logit = dis(fake_cp, reuse=True)
+	g_params = tf.get_collection(
+		tf.GraphKeys.TRAINABLE_VARIABLES, scope="generator")
+	d_params = tf.get_collection(
+		tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator")
 
 	g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(fake_logit),logits=fake_logit))
 	d_loss =  tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.zeros_like(fake_logit), logits=fake_logit))
@@ -174,15 +94,13 @@ def build_graph(real_cp):
 	print "true logit shape: ", true_logit.shape
 	print "fake logit shape: ", fake_logit.shape
 
-	d_real_conf = tf.divide(tf.reduce_sum(tf.maximum(tf.minimum(true_logit, 0.99), 0.01)), batch_size)
-	d_fake_conf = tf.divide(tf.reduce_sum(tf.maximum(tf.minimum(fake_logit, 0.99), 0.01)), batch_size)
+	d_real_conf = tf.reduce_mean(tf.sigmoid(true_logit))
+	d_fake_conf = tf.reduce_mean(tf.sigmoid(fake_logit))
 
 	summary_real_conf = tf.summary.scalar("real_conf", d_real_conf)
 	summary_fake_conf = tf.summary.scalar("fake_conf", d_fake_conf)
 
-	# rimg = tf.placeholder(tf.float32)
 	fimg = tf.placeholder(tf.float32)
-	# real_img_summary = tf.summary.image('real', rimg, max_outputs=batch_size)
 	fake_img_summary = tf.summary.image('fake', fimg, max_outputs=10)
 
 	d_output_x = true_logit
@@ -196,32 +114,40 @@ def build_graph(real_cp):
 	g_loss_sum = tf.summary.scalar("g_loss", g_loss)
 	d_loss_sum = tf.summary.scalar("d_loss", d_loss)
 
-	g_params = tf.get_collection(
-		tf.GraphKeys.TRAINABLE_VARIABLES, scope="generator")
-	d_params = tf.get_collection(
-		tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator")
+	gen_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_GEN, beta1=0.5, beta2=0.9).minimize(g_loss, var_list=g_params)
+	disc_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_DIS, beta1=0.5, beta2=0.9).minimize(d_loss, var_list=d_params)
 
-	opt_g = tf.train.AdamOptimizer(learning_rate=learning_rate_gen, beta1=0.5).minimize(g_loss, var_list=g_params)
-	opt_d = tf.train.AdamOptimizer(learning_rate=learning_rate_dis, beta1=0.5).minimize(d_loss, var_list=d_params)
+	merge_no_img = tf.summary.merge([summary_real_conf,summary_fake_conf,summary_d_z_hist,summary_d_x_hist, g_loss_sum, d_loss_sum])
 
-	return opt_g, opt_d, g_loss, d_loss, d_real_conf, d_fake_conf, fake_cp, fimg
+	return gen_train_op, disc_train_op,	g_loss, d_loss, d_real_conf, d_fake_conf, fake_cp, fimg, merge_no_img
 
 def main():
 	config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
 	config.gpu_options.allow_growth = True
 	# config.gpu_options.per_process_gpu_memory_fraction = 0.8
+	print "Current Config: ", current_config['config_name']
+	print "Loading bsCoeff: %r, Sample Rate %r" % (bs_path, SAMPLE_RATE)
 
-	clear_file(log_path, '.g01')
-	clear_file(vis_path, '.png')
-	print "Clear File"
-	bsCoeff = load_bsCoeff(bs_path)
+	with tf.device(device_cpu):
+		clear_file(log_path, '.g01')
+		clear_file(vis_path, '.png')
+		print "Clear File"
+
+		if MODE == 0:
+			bsCoeff = load_bsCoeff(bs_path)
+		elif MODE == 1:
+			bsCoeff, ocp = load_bsCoeff_cp(bs_path)
+			bsCoeff = sample_skull_points(bsCoeff, SAMPLE_RATE)
 
 	with tf.device(device_gpu):
-		weights = init_weights()
-		biases = init_biases()
-		cp_batch = load_data(record_path, n_epoch, batch_size, tuple(shape_size))
-		opt_g, opt_d, g_loss, d_loss, real_conf, fake_conf, fake_cp, fimg = build_graph(cp_batch)
-		merged_all = tf.summary.merge_all()		
+		weights = init_weights(filter_num_d, output_shape, Z_SIZE)
+		biases = init_biases(filter_num_d, output_shape)
+		#displacement field
+		cp_batch = load_data(record_path, n_epoch, BATCH_SIZE, tuple(SHAPE_SIZE), MODE)
+		gen_train_op, disc_train_op, g_loss, d_loss, real_conf, fake_conf, fake_cp, fimg, merge_no_img = build_graph(cp_batch)
+		merged_all = tf.summary.merge_all()
+		rimg = tf.placeholder(tf.float32)
+		real_img_summary = tf.summary.image('real', rimg, max_outputs=5)
 		print "Finish Building Graph"
 
 	with tf.Session(config=config) as sess:
@@ -234,60 +160,92 @@ def main():
 
 		print "Finish Init and Start Training Step"
 
-		if resume:
+		if RESUME:
 			print("Load existing model " + "!"*10)
 			saver = tf.train.Saver()
 			saver.restore(sess, model_file_name)
 
 		saver = tf.train.Saver(max_to_keep=None)
 
-		for i in range(max_iter_step):
-			if i < 25 or i % 500 == 0:
-				d_extra_step = 20
+		##Vis real img
+		#"Test Real img"
+		rcp = sess.run(cp_batch)
 
-			rc = sess.run(real_conf)
-			gl = sess.run(g_loss)
-			if rc < 0.9:
-				if rc < 0.7 and gl < 0.65:
-					for j in range(d_extra_step):
-						sess.run([opt_d])
-						if j % 5 == 4:
-							print "d_extra: %r of total %r during step %r real_conf %r, d_loss %r" % (j+1, 
-								d_extra_step, i+1, sess(real_conf), sess.run(d_loss))
-				else:
-					sess.run([opt_d])
+		with tf.device(device_cpu):
+			rcp = np.reshape(rcp, (BATCH_SIZE,-1,3))
 
+			rcp0 = rcp[0]
+			count = 0
+			for r in rcp:
+				if np.all(r == rcp0):
+					count += 1
 
-			fc = sess.run(fake_conf)
-			if fc < 0.2:
-				g_extra_step = 300
-
-			if fc < 0.5 and sess.run(real_conf) > 0.8:
-				for j in range(g_extra_step):
-					sess.run([opt_g])
-					if j % 50 == 49:
-						print "g_extra: %r of total %r during step %r, fake_conf %r g_loss %r" % (j+1, 
-							g_extra_step, i+1, sess.run(fake_conf), sess.run(g_loss))
+			if count > 1:
+				print "data duplicated! count: ", count
 			else:
-				sess.run([opt_g])
+				print "data seems good! count: ", count
 
+			zeros = np.zeros_like([rcp0])
+			rcp = np.concatenate((zeros, rcp), axis=0)
+			if MODE == 0:
+				rvimg = vis_image(bsCoeff, rcp, 0, True)
+			elif MODE == 1:
+				rvimg = vis_image_displacement(bsCoeff, ocp, rcp, 0, True)
+				save_vis_image(rvimg, 0, vis_path, 8, 16)
+
+		merged = sess.run(real_img_summary, feed_dict={rimg:rvimg[:6]})
+		summary_writer.add_summary(merged, 1)
+
+		for iteration in xrange(ITERS):
+
+			sess.run(disc_train_op)
+
+			if sess.run(fake_conf) < 0.5 and sess.run(real_conf) > 0.8:
+				for j in range(G_EXTRA_STEP):
+					sess.run([gen_train_op])
+			else:
+				sess.run([gen_train_op])
+   
+			if iteration % PRINT == PRINT - 1:
+				print "step: %r of total step %r" % (iteration+1, ITERS)
+
+				fc, rc = sess.run([fake_conf, real_conf])
+				gl, dl = sess.run([g_loss, d_loss])
+				print "fake_conf %r g_loss %r, real_conf %r d_loss %r" % (fc, gl, rc, dl)
+				# if REGULARIZE:
+				# 	gl, rl, dl = sess.run([g_loss, reg_loss, d_loss])
+				# 	print "fake_conf %r g_loss %r reg_loss %r, real_conf %r d_loss %r" % (fc, gl, rl, rc, dl)
+				# else:
+				# 	gl, dl = sess.run([g_loss, d_loss])
+				# 	print "fake_conf %r g_loss %r, real_conf %r d_loss %r" % (fc, gl, rc, dl)
 			
-			print "step: %r of total step %r" % (i+1, max_iter_step)
-			print "fake_conf %r g_loss %r, real_conf %r d_loss %r" % (sess.run(fake_conf), sess.run(g_loss), sess.run(real_conf), sess.run(d_loss))
+			if (iteration % MERGE == MERGE-1) and (iteration % VIS_SAVE != VIS_SAVE-1):
+				merged_no_img = sess.run(merge_no_img)
+				summary_writer.add_summary(merged_no_img, iteration+1)
 
-			if i % VIS_SAVE == VIS_SAVE-1:
+			if iteration % VIS_SHOW == VIS_SHOW-1:
 				with tf.device(device_cpu):
 					fcp = sess.run(fake_cp)
-					fcp = np.reshape(fcp, (batch_size,-1,3))
-					fvimg = vis_image(bsCoeff, fcp, i+1, 10, vis_path)
-				merged = sess.run(merged_all, feed_dict={fimg:fvimg})
-				summary_writer.add_summary(merged, i)
+					fcp = np.reshape(fcp, (BATCH_SIZE,-1,3))
+					if MODE == 0:
+						fvimg = vis_image(bsCoeff, fcp, iteration+1)
+					elif MODE == 1:
+						fvimg = vis_image_displacement(bsCoeff, ocp, fcp, iteration+1)
 
-			if i % VIS_SAVE == VIS_SAVE-1:
+					if iteration % VIS_SAVE == VIS_SAVE-1:
+						save_vis_image(fvimg, iteration+1, vis_path, 8, 16)
+
+				merged = sess.run(merged_all, feed_dict={fimg:fvimg[:10]})
+				summary_writer.add_summary(merged, iteration+1)
+
+			if iteration % VIS_SAVE == VIS_SAVE-1:
 				if not os.path.exists(model_path):
 					os.mkdir(model_path)
-				saver.save(sess, model_path+model_file_name+".ckpt", global_step=i)
-				print "saving model of step " + str(i) + "!"*10 
+				saver.save(sess, model_path+model_file_name+".ckpt", global_step=iteration + 1)
+				print "finish saving model of step " + str(iteration + 1) + "!"*10
+
+		coord.request_stop()
+		coord.join(threads)
 
 if __name__ == '__main__':
 	main()

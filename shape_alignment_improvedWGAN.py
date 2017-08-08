@@ -13,7 +13,7 @@ LEARNING_RATE_DIS = 2e-4
 SHAPE_SIZE = [9,9,9,3]
 
 LAMBDA = 10 # Gradient penalty lambda hyperparameter
-CRITIC_ITERS = 5 # How many critic iterations per generator iteration
+CRITIC_ITERS = 25 # How many critic iterations per generator iteration
 BATCH_SIZE = 64 # Batch size
 ITERS = 200000 # How many generator iterations to train for
 OUTPUT_DIM = SHAPE_SIZE[0] * SHAPE_SIZE[1] * SHAPE_SIZE[2] * SHAPE_SIZE[3] # Number of pixels in  (3*9*9*9)
@@ -76,7 +76,7 @@ CONFIGURATION = [
         'vis_path': './vis/chair_' + str(Z_SIZE) + '_lz/',
         'SAMPLE_RATE': 1,
         'MODE': 1,
-        'REGULARIZE': False
+        'REGULARIZE': True
     },
 ]
 
@@ -108,8 +108,8 @@ n_epoch = 100000
 
 RESUME = False
 REGULARIZE = current_config['REGULARIZE']
-REG_LAMDA = 0.0001
-REG_LIMIT = 5
+REG_LAMDA = 0.1
+REG_LIMIT = 1000
 
 def build_graph(real_cp):
     real_cp = tf.reshape(real_cp, [BATCH_SIZE, OUTPUT_DIM])
@@ -245,13 +245,15 @@ def main():
             else:
                 print "data seems good! count: ", count
 
+            zeros = np.zeros_like([rcp0])
+            rcp = np.concatenate((zeros, rcp), axis=0)
             if MODE == 0:
                 rvimg = vis_image(bsCoeff, rcp, 0, True)
             elif MODE == 1:
                 rvimg = vis_image_displacement(bsCoeff, ocp, rcp, 0, True)
-                save_vis_image(rvimg, 0, vis_path)
+                save_vis_image(rvimg, 0, 8, 8, vis_path)
 
-        merged = sess.run(real_img_summary, feed_dict={rimg:rvimg[:5]})
+        merged = sess.run(real_img_summary, feed_dict={rimg:rvimg[:6]})
         summary_writer.add_summary(merged, 1)
 
         for iteration in xrange(ITERS):
@@ -260,10 +262,8 @@ def main():
                 sess.run(gen_train_op)
                 # print "training g, fake_conf %r g_loss %r" % (sess.run(fake_conf), sess.run(g_loss))
             # Train critic
-            if iteration < 500:
-                disc_iters = 25
-            else:
-                disc_iters = CRITIC_ITERS
+           
+            disc_iters = CRITIC_ITERS
             for i in xrange(disc_iters):
                 sess.run(disc_train_op)
                 # print "d_critic: %r of total %r real_conf %r, d_loss %r" % (i+1, 
@@ -293,7 +293,7 @@ def main():
                         fvimg = vis_image_displacement(bsCoeff, ocp, fcp, iteration+1)
 
                     if iteration % VIS_SAVE == VIS_SAVE-1:
-                        save_vis_image(fvimg, iteration+1, vis_path)
+                        save_vis_image(fvimg, iteration+1, vis_path, 8, 8)
 
                 merged = sess.run(merged_all, feed_dict={fimg:fvimg[:10]})
                 summary_writer.add_summary(merged, iteration+1)
