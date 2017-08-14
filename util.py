@@ -169,3 +169,17 @@ def sample_skull_points(bsCoeff,sample_rate):
 	sample_idx = [int(i*sample_rate) for i in range(int(length / sample_rate))]
 	return bsCoeff[sample_idx]
 
+def test_batch(cp, name):
+	cp0 = cp[0]
+	count = 0
+	for c in cp:
+		if np.all(c == cp0):
+			count += 1
+
+	mean = np.mean(np.reshape(cp,[-1,3]), axis=0)
+
+	print name + ' offset: ', mean
+	if count > 1:
+		print name + " data duplicated! count: ", count
+	else:
+		print name + " data seems good! count: ", count
