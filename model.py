@@ -1,6 +1,7 @@
 from tensorflow import layers as ly
 import tensorflow as tf
 import tensorflow.contrib.layers as cly
+import numpy as np
 
 delving_init = tf.contrib.layers.variance_scaling_initializer(factor=2.0, mode='FAN_IN', uniform=False, seed=None, dtype=tf.float32)
 xavier_init = tf.contrib.layers.xavier_initializer()
@@ -19,6 +20,22 @@ DROPOUT = True
 
 def LeakyReLU(x, alpha=0.2):
 	return tf.maximum(alpha*x, x)
+
+def enable_default_weightnorm():
+    global _default_weightnorm
+    _default_weightnorm = True
+
+def disable_default_weightnorm():
+    global _default_weightnorm
+    _default_weightnorm = False
+
+def set_weights_stdev(weights_stdev):
+    global _weights_stdev
+    _weights_stdev = weights_stdev
+
+def unset_weights_stdev():
+    global _weights_stdev
+    _weights_stdev = None
 
 def init_weights(filter_num_d, output_shape, Z_SIZE):
 
@@ -68,23 +85,23 @@ def generator(n_samples, output_shape, Z_SIZE, phase_train=True, noise=None, reu
 		print "noise shape: ", noise.shape
 		shape = output_shape['g1']
 		number_outputs = shape[1] * shape[2] * shape[3] * shape[4]
-		g1 = cly.fully_connected(inputs=noise, num_outputs=number_outputs, activation_fn=tf.nn.relu, weights_initializer=fc_init)
+		g1 = tf.matmul(noise, weights['wg1'])
+		g1 = tf.nn.bias_add(g1, biases['bg1'])
 		g1 = ly.batch_normalization(g1, training=phase_train)
 		g1 = tf.reshape(g1, output_shape['g1'])
-
 		print "g1 shape: ", g1.shape
 
 		g2 = tf.nn.conv3d_transpose(g1, weights['wg2'], output_shape=output_shape['g2'], strides=strides, padding="SAME")
 		g2 = tf.nn.bias_add(g2, biases['bg2'])
 		g2 = ly.batch_normalization(g2, training=phase_train)
-		g2 = LeakyReLU(g2)
+		g2 = tf.nn.relu(g2)
 
 		print "g2 shape: ", g2.shape
 
 		g3 = tf.nn.conv3d_transpose(g2, weights['wg3'], output_shape=output_shape['g3'], strides=strides, padding="SAME")
 		g3 = tf.nn.bias_add(g3, biases['bg3'])
 		g3 = ly.batch_normalization(g3, training=phase_train)
-		g3 = LeakyReLU(g3)
+		g3 = tf.nn.relu(g3)
 
 		print "g3 shape: ", g3.shape
 

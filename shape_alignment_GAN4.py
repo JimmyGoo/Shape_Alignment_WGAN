@@ -14,9 +14,9 @@ BETA1 = 0.5
 BETA2 = 0.9
 SHAPE_SIZE = [9,9,9,3]
 
-BATCH_SIZE = 128 # Batch size
+BATCH_SIZE = 64 # Batch size
 LENGTH1 = 8
-LENGTH2 = 16
+LENGTH2 = 8
 
 G_EXTRA_STEP = 500
 D_EXTRA_STEP = 20
@@ -24,10 +24,10 @@ D_EXTRA_STEP = 20
 ITERS = 50000 # How many generator iterations to train for
 OUTPUT_DIM = SHAPE_SIZE[0] * SHAPE_SIZE[1] * SHAPE_SIZE[2] * SHAPE_SIZE[3] # Number of pixels in  (3*9*9*9)
 Z_SIZE = 10
-MERGE = 50
+MERGE = 200
 PRINT = 50
 
-VIS_SHOW = 5000
+VIS_SHOW = 2000
 VIS_SAVE = 10000
 
 device_gpu = '/gpu:0'
@@ -89,8 +89,8 @@ n_epoch = 2000
 
 RESUME = False
 REGULARIZE = current_config['REGULARIZE']
-REG_LAMDA = 1
-REG_LIMIT = 5
+REG_LAMDA = 10
+REG_LIMIT = 500
 
 def build_graph(real_cp):
 	real_cp = tf.reshape(real_cp, [BATCH_SIZE, OUTPUT_DIM])
@@ -146,7 +146,7 @@ def build_graph(real_cp):
 
 	merge_no_img = tf.summary.merge([summary_real_conf,summary_fake_conf,summary_fake_hist,summary_true_hist, g_loss_sum, d_loss_sum])
 
-	return gen_train_op, disc_train_op,	g_loss, reg_loss, d_loss, d_real_conf, d_fake_conf, fimg, merge_no_img
+	return gen_train_op, disc_train_op,	g_loss, reg_loss, d_loss, d_real_conf, d_fake_conf, fimg, merge_no_img, fake_img_summary
 
 def main():
 	config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
@@ -169,7 +169,7 @@ def main():
 	biases = init_biases(filter_num_d, output_shape)
 
 	cp_batch = load_data(record_path, n_epoch, BATCH_SIZE, tuple(SHAPE_SIZE), MODE)
-	gen_train_op, disc_train_op, g_loss, reg_loss, d_loss, real_conf, fake_conf, fimg, merge_no_img = build_graph(cp_batch)
+	gen_train_op, disc_train_op, g_loss, reg_loss, d_loss, real_conf, fake_conf, fimg, merge_no_img, fake_img_summary = build_graph(cp_batch)
 	fake_cp = generator(BATCH_SIZE, output_shape, Z_SIZE, reuse=True, phase_train=False)
 
 	merged_all = tf.summary.merge_all()
@@ -205,25 +205,25 @@ def main():
 			rvimg = vis_image(bsCoeff, rcp, 0, True)
 		elif MODE == 1:
 			rvimg = vis_image_displacement(bsCoeff, ocp, rcp, 0, True)
-			save_vis_image(rvimg, 0, vis_path, LENGTH1, LENGTH2)
+			# save_vis_image(rvimg, 0, vis_path, LENGTH1, LENGTH2)
 
 		merged = sess.run(real_img_summary, feed_dict={rimg:rvimg[:6]})
 		summary_writer.add_summary(merged, 1)
 
 		for iteration in xrange(ITERS):
-			sess.run(disc_train_op)
-			sess.run(gen_train_op)
-			# if sess.run(real_conf) < 0.5:
-			# 	for j in range(D_EXTRA_STEP):
-			# 		sess.run(disc_train_op)
-			# elif sess.run(real_conf) < 0.8:
-			# 	sess.run(disc_train_op)
+			# sess.run(disc_train_op)
+			# sess.run(gen_train_op)
+			if sess.run(real_conf) < 0.5:
+				for j in range(D_EXTRA_STEP):
+					sess.run(disc_train_op)
+			elif sess.run(real_conf) < 0.8:
+				sess.run(disc_train_op)
 
-			# if sess.run(fake_conf) < 0.4 and sess.run(real_conf) > 0.9:
-			# 	for j in range(G_EXTRA_STEP):
-			# 		sess.run(gen_train_op)
-			# else:
-			# 	sess.run(gen_train_op)
+			if sess.run(fake_conf) < 0.4 and sess.run(real_conf) > 0.9:
+				for j in range(G_EXTRA_STEP):
+					sess.run(gen_train_op)
+			else:
+				sess.run(gen_train_op)
    
 			if iteration % PRINT == PRINT - 1:
 				print "step: %r of total step %r" % (iteration+1, ITERS)
@@ -255,7 +255,7 @@ def main():
 				if iteration % VIS_SAVE == VIS_SAVE-1:
 					save_vis_image(fvimg, iteration+1, vis_path, LENGTH1, LENGTH2)
 
-				merged = sess.run(merged_all, feed_dict={fimg:fvimg[:10]})
+				merged = sess.run(fake_img_summary, feed_dict={fimg:fvimg[:10]})
 				summary_writer.add_summary(merged, iteration+1)
 
 				#real
