@@ -1,4 +1,4 @@
-# 3D_Alignment_WGAN
+# Shape_Alignment_WGAN
 Generate FFD for alignment by using WGAN
 
 ## Goal
