@@ -15,6 +15,8 @@ elif init_mode == 1:
 else:
 	print "init mode error"
 
+TANH = False
+
 def generator_tl(n_samples, output_shape, gen_filter_shape, Z_SIZE, is_training=True, noise=None, reuse=False):
 	if noise is None:
 		noise = tf.random_normal([n_samples, Z_SIZE])
@@ -41,11 +43,14 @@ def generator_tl(n_samples, output_shape, gen_filter_shape, Z_SIZE, is_training=
 		g4 = ly.BatchNormLayer(g4, name='gen4_bn', act=tf.nn.relu, is_train=is_training)
 
 		train_params = g4.all_params
-		ly.print_all_variables()
+		print "g_params: ",train_params
 		g4.print_layers()
-		g4 = tf.tanh(g4.outputs)
+		if TANH:
+			outputs = tf.tanh(g4.outputs)
+		else:
+			outputs = g4.outputs
 
-	return g4, train_params
+	return outputs, train_params
 
 def discriminator_tl(inputs, batch_size, dis_filter_shape, output_shape, is_training=True, reuse=False, GP=False):
 
@@ -71,7 +76,8 @@ def discriminator_tl(inputs, batch_size, dis_filter_shape, output_shape, is_trai
 		d4 = ly.DenseLayer(d3, n_units=1, name='dis4_dense', act= lambda x : tl.act.lrelu(x, 0.2))
 
 		train_params = d4.all_params
-		ly.print_all_variables()
+		print "d_params: ",train_params
 		d4.print_layers()
+		outputs = d4.outputs
 
-	return d4.outputs, train_params
+	return outputs, train_params

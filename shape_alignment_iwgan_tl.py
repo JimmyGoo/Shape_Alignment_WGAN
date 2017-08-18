@@ -27,15 +27,14 @@ C_UPPER = -C_LOWER
 
 ITERS = 100000 # How many generator iterations to train for
 OUTPUT_DIM = SHAPE_SIZE[0] * SHAPE_SIZE[1] * SHAPE_SIZE[2] * SHAPE_SIZE[3] # Number of pixels in  (3*9*9*9)
-Z_SIZE = 20
+Z_SIZE = 10
 MERGE = 200
 PRINT = 50
 
 VIS_SHOW = 2000
 VIS_SAVE = 10000
 
-ADAM = False
-
+ADAM = True
 device_gpu = '/gpu:0'
 device_cpu = '/cpu:0'
 
@@ -240,11 +239,9 @@ def build_graph(real_cp):
 			disc_train_op = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_cost, var_list=d_params)
 
 		if GP == False:
-			clipped_var_d = [tf.assign(var, tf.clip_by_value(var, C_LOWER, C_UPPER)) for var in d_params]
-			with tf.control_dependencies([disc_train_op]):
-				disc_train_op = tf.tuple(clipped_var_d)
-
-	return gen_train_op, disc_train_op, gen_cost, reg_loss, disc_cost, d_real_conf, d_fake_conf, fimg, merge_no_img, fake_img_summary
+			d_clip = [tf.assign(var, tf.clip_by_value(var, C_LOWER, C_UPPER)) for var in d_params]
+		
+	return gen_train_op, disc_train_op, gen_cost, reg_loss, disc_cost, d_real_conf, d_fake_conf, fimg, merge_no_img, fake_img_summary, d_clip
 
 # Train loop
 def main():
@@ -266,7 +263,7 @@ def main():
 
 	#displacement field
 	cp_batch = load_data(record_path, n_epoch, BATCH_SIZE, tuple(SHAPE_SIZE), MODE)
-	gen_train_op, disc_train_op, g_loss, reg_loss, d_loss, real_conf, fake_conf, fimg, merge_no_img, fake_img_summary = build_graph(cp_batch)
+	gen_train_op, disc_train_op, g_loss, reg_loss, d_loss, real_conf, fake_conf, fimg, merge_no_img, fake_img_summary, d_clip = build_graph(cp_batch)
 	fake_cp, _ = generator_tl(BATCH_SIZE, output_shape, gen_filter_shape, Z_SIZE, reuse=True, is_training=False)
 	merged_all = tf.summary.merge_all()
 	rimg = tf.placeholder(tf.float32)
@@ -317,6 +314,7 @@ def main():
 
 			for i in xrange(disc_iters):
 				sess.run(disc_train_op)
+				sess.run(d_clip)
 				
 			if iteration % PRINT == PRINT - 1:
 				print "step: %r of total step %r" % (iteration+1, ITERS)
