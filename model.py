@@ -21,22 +21,6 @@ DROPOUT = True
 def LeakyReLU(x, alpha=0.2):
 	return tf.maximum(alpha*x, x)
 
-def enable_default_weightnorm():
-    global _default_weightnorm
-    _default_weightnorm = True
-
-def disable_default_weightnorm():
-    global _default_weightnorm
-    _default_weightnorm = False
-
-def set_weights_stdev(weights_stdev):
-    global _weights_stdev
-    _weights_stdev = weights_stdev
-
-def unset_weights_stdev():
-    global _weights_stdev
-    _weights_stdev = None
-
 def init_weights(filter_num_d, output_shape, Z_SIZE):
 
 	global weights
@@ -45,14 +29,22 @@ def init_weights(filter_num_d, output_shape, Z_SIZE):
 	g1_s = output_shape['g1']
 
 	# filter for deconv3d: A 5-D Tensor with the same type as value and shape [depth, height, width, output_channels, in_channels]
-	weights['wg1'] = tf.get_variable("wg1", shape=[Z_SIZE, g1_s[1]*g1_s[2]*g1_s[3]*filter_num_d['4']], initializer=current_init)
-	weights['wg2'] = tf.get_variable("wg2", shape=[4, 4, 4, filter_num_d['3'], filter_num_d['4']], initializer=current_init)
-	weights['wg3'] = tf.get_variable("wg3", shape=[4, 4, 4, filter_num_d['2'], filter_num_d['3']], initializer=current_init)
-	weights['wg4'] = tf.get_variable("wg4", shape=[4, 4, 4, filter_num_d['1'], filter_num_d['2']], initializer=current_init)
+	with tf.variable_scope("generator") as scope:
+		weights['wg1'] = tf.get_variable("wg1", shape=[Z_SIZE, g1_s[1]*g1_s[2]*g1_s[3]*filter_num_d['4']], initializer=current_init)
+		weights['wg2'] = tf.get_variable("wg2", shape=[4, 4, 4, filter_num_d['3'], filter_num_d['4']], initializer=current_init)
+		weights['wg3'] = tf.get_variable("wg3", shape=[4, 4, 4, filter_num_d['2'], filter_num_d['3']], initializer=current_init)
+		weights['wg4'] = tf.get_variable("wg4", shape=[4, 4, 4, filter_num_d['1'], filter_num_d['2']], initializer=current_init)
 
-	weights['wd1'] = tf.get_variable("wd1", shape=[4, 4, 4, filter_num_d['1'], filter_num_d['2']], initializer=current_init)
-	weights['wd2'] = tf.get_variable("wd2", shape=[4, 4, 4, filter_num_d['2'], filter_num_d['3']], initializer=current_init)
-	weights['wd3'] = tf.get_variable("wd3", shape=[4, 4, 4, filter_num_d['3'], filter_num_d['4']], initializer=current_init)
+	with tf.variable_scope("discriminator") as scope:
+		weights['wd1'] = tf.get_variable("wd1", shape=[4, 4, 4, filter_num_d['1'], filter_num_d['2']], initializer=current_init)
+		weights['wd2'] = tf.get_variable("wd2", shape=[4, 4, 4, filter_num_d['2'], filter_num_d['3']], initializer=current_init)
+		weights['wd3'] = tf.get_variable("wd3", shape=[4, 4, 4, filter_num_d['3'], filter_num_d['4']], initializer=current_init)
+
+	weights['we1'] = tf.get_variable("we1", shape=[4, 4, 4, filter_num_d['2'], filter_num_d['1']], initializer=current_init)
+	weights['we2'] = tf.get_variable("we2", shape=[4, 4, 4, filter_num_d['3'], filter_num_d['2']], initializer=current_init)
+	weights['we3'] = tf.get_variable("we3", shape=[4, 4, 4, filter_num_d['1'], filter_num_d['3']], initializer=current_init)
+	weights['we4'] = tf.get_variable("we4", shape=[4, 4, 4, filter_num_d['1'], filter_num_d['2']], initializer=current_init)
+	return weights
 	
 def init_biases(filter_num_d, output_shape):
 	
@@ -61,14 +53,59 @@ def init_biases(filter_num_d, output_shape):
 
 	g1_s = output_shape['g1']
 
-	biases['bg1'] = tf.get_variable("bg1", shape=[g1_s[1]*g1_s[2]*g1_s[3]*filter_num_d['4']], initializer=zero_init)
-	biases['bg2'] = tf.get_variable("bg2", shape=[filter_num_d['3']], initializer=zero_init)
-	biases['bg3'] = tf.get_variable("bg3", shape=[filter_num_d['2']], initializer=zero_init)
-	biases['bg4'] = tf.get_variable("bg4", shape=[filter_num_d['1']], initializer=zero_init)
+	with tf.variable_scope("generator") as scope:
 
-	biases['bd1'] = tf.get_variable("bd1", shape=[filter_num_d['2']], initializer=zero_init)
-	biases['bd2'] = tf.get_variable("bd2", shape=[filter_num_d['3']], initializer=zero_init)
-	biases['bd3'] = tf.get_variable("bd3", shape=[filter_num_d['4']], initializer=zero_init)
+		biases['bg1'] = tf.get_variable("bg1", shape=[g1_s[1]*g1_s[2]*g1_s[3]*filter_num_d['4']], initializer=zero_init)
+		biases['bg2'] = tf.get_variable("bg2", shape=[filter_num_d['3']], initializer=zero_init)
+		biases['bg3'] = tf.get_variable("bg3", shape=[filter_num_d['2']], initializer=zero_init)
+		biases['bg4'] = tf.get_variable("bg4", shape=[filter_num_d['1']], initializer=zero_init)
+
+	with tf.variable_scope("discriminator") as scope:
+		biases['bd1'] = tf.get_variable("bd1", shape=[filter_num_d['2']], initializer=zero_init)
+		biases['bd2'] = tf.get_variable("bd2", shape=[filter_num_d['3']], initializer=zero_init)
+		biases['bd3'] = tf.get_variable("bd3", shape=[filter_num_d['4']], initializer=zero_init)
+	return biases
+
+def encoder(inputs, batch_size, output_shape, Z_SIZE, phase_train=True, reuse=False):
+
+	strides    = [1,2,2,2,1]
+	with tf.variable_scope("encoder") as scope:
+		if reuse:
+			scope.reuse_variables()
+
+		inputs = tf.reshape(inputs, output_shape['g4'])
+		print "inputs shape: ", inputs.shape
+
+		e1 = tf.nn.conv3d(inputs, weights['we1'], strides=strides, padding="SAME")
+		e1 = tf.nn.bias_add(e1, biases['be1'])
+		e1 = tf.contrib.layers.batch_norm(e1, is_training=phase_train)                               
+		e1 = tf.nn.relu(e1)
+
+		print "e1 shape: ", e1.shape
+
+		e2 = tf.nn.conv3d(e1, weights['we2'], strides=strides, padding="SAME") 
+		e2 = tf.nn.bias_add(e2, biases['be2'])
+		e2 = tf.contrib.layers.batch_norm(e2, is_training=phase_train)
+		e2 = tf.nn.relu(e2)
+		
+		print "e2 shape: ", e2.shape
+
+		e3 = tf.nn.conv3d(e2, weights['we3'], strides=strides, padding="SAME")  
+		e3 = tf.nn.bias_add(e3, biases['be3'])
+		e3 = tf.contrib.layers.batch_norm(e3, is_training=phase_train)
+		e3 = tf.nn.relu(e3)
+
+		print "e3 shape: ", e3.shape
+
+		e4 = cly.fully_connected(tf.reshape(
+			e3, [batch_size, -1]), Z_SIZE, activation_fn=None, weights_initializer=fc_init)
+		e4 = tf.contrib.layers.batch_norm(e4, is_training=phase_train)
+		e4 = tf.nn.relu(e4)
+		e4 = tf.reshape(e4, [batch_size, Z_SIZE])
+		
+		print "e4 shape: ", e4.shape
+
+	return e4
 
 def generator(n_samples, output_shape, Z_SIZE, phase_train=True, noise=None, reuse=False):
 	if noise is None:
@@ -107,7 +144,7 @@ def generator(n_samples, output_shape, Z_SIZE, phase_train=True, noise=None, reu
 
 		g4 = tf.nn.conv3d_transpose(g3, weights['wg4'], output_shape=output_shape['g4'], strides=strides, padding="SAME")
 		g4 = tf.nn.bias_add(g4, biases['bg4'])                                   
-		g4 = tf.tanh(g4)
+		# g4 = tf.tanh(g4)
 
 		print "g4 shape: ", g4.shape
 

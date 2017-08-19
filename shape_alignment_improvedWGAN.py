@@ -10,6 +10,7 @@ os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
 
 LEARNING_RATE_GEN = 1e-4
 LEARNING_RATE_DIS = 1e-4
+#Adam 
 BETA1 = 0.5
 BETA2 = 0.9
 SHAPE_SIZE = [9,9,9,3]
@@ -24,9 +25,9 @@ LENGTH2 = 8
 C_LOWER = -0.1
 C_UPPER = -C_LOWER
 
-ITERS = 50000 # How many generator iterations to train for
+ITERS = 100000 # How many generator iterations to train for
 OUTPUT_DIM = SHAPE_SIZE[0] * SHAPE_SIZE[1] * SHAPE_SIZE[2] * SHAPE_SIZE[3] # Number of pixels in  (3*9*9*9)
-Z_SIZE = 5
+Z_SIZE = 20
 MERGE = 200
 PRINT = 50
 
@@ -177,28 +178,35 @@ def build_graph(real_cp):
 	true_logit = discriminator(real_cp, filter_num_d, output_shape, BATCH_SIZE)
 	fake_logit = discriminator(fake_cp, filter_num_d, output_shape, BATCH_SIZE, reuse=True)
 
-	g_params = tf.get_collection(
-		tf.GraphKeys.TRAINABLE_VARIABLES, scope="generator")
-	d_params = tf.get_collection(
-		tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator")
-
 	# Standard WGAN loss
-	gen_cost = -tf.reduce_mean(fake_logit)
-	disc_cost = tf.reduce_mean(fake_logit) - tf.reduce_mean(true_logit)
+	with tf.name_scope("cost"):
+		gen_cost = -tf.reduce_mean(fake_logit)
+		disc_cost = tf.reduce_mean(fake_logit) - tf.reduce_mean(true_logit)
 
-	reg_loss = tf.constant(0)
-	if REGULARIZE:
-		real_mean = tf.reduce_mean(tf.reshape(real_cp, [-1,3]), axis=0)
-		fack_mean = tf.reduce_mean(tf.reshape(fake_cp, [-1,3]), axis=0)
+		reg_loss = tf.constant(0)
+		if REGULARIZE:
+			real_mean = tf.reduce_mean(tf.reshape(real_cp, [-1,3]), axis=0)
+			fack_mean = tf.reduce_mean(tf.reshape(fake_cp, [-1,3]), axis=0)
 
-		reg_loss = tf.nn.l2_loss(real_mean - fack_mean)
-		reg_loss = tf.minimum(REG_LAMDA * reg_loss, REG_LIMIT)
-		gen_cost += reg_loss
-		# reg_loss = tf.nn.l2_loss(fake_cp) / ftf.cast(tf.size(fake_cp), tf.float32)
-		# reg_loss = REG_LAMDA * reg_loss
-		# reg_loss = tf.minimum(reg_loss, REG_LIMIT)
-		# gen_cost -= reg_loss
-		reg_loss_sum = tf.summary.scalar("g_loss_reg", reg_loss)
+			reg_loss = tf.nn.l2_loss(real_mean - fack_mean)
+			reg_loss = tf.minimum(REG_LAMDA * reg_loss, REG_LIMIT)
+			gen_cost += reg_loss
+			reg_loss_sum = tf.summary.scalar("g_loss_reg", reg_loss)
+
+		# Gradient penalty
+		if GP == True:
+			alpha = tf.random_uniform(
+				shape=[BATCH_SIZE,1], 
+				minval=0.,
+				maxval=1.
+			)
+
+			differences = fake_cp - real_cp
+			interpolates = real_cp + (alpha*differences)
+			gradients = tf.gradients(discriminator(interpolates, filter_num_d, output_shape, BATCH_SIZE,  reuse=True), [interpolates])[0]
+			slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1]))
+			gradient_penalty = tf.reduce_mean((slopes-1.)**2)
+			disc_cost += LAMBDA*gradient_penalty
 
 	print "true logit shape: ", true_logit.shape
 	print "fake logit shape: ", fake_logit.shape
@@ -218,38 +226,26 @@ def build_graph(real_cp):
 
 	g_loss_sum = tf.summary.scalar("g_loss", gen_cost)
 	d_loss_sum = tf.summary.scalar("d_loss", disc_cost)
-
-	# Gradient penalty
-	if GP == True:
-		alpha = tf.random_uniform(
-			shape=[BATCH_SIZE,1], 
-			minval=0.,
-			maxval=1.
-		)
-
-		differences = fake_cp - real_cp
-		interpolates = real_cp + (alpha*differences)
-		gradients = tf.gradients(discriminator(interpolates, filter_num_d, output_shape, BATCH_SIZE,  reuse=True), [interpolates])[0]
-		slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1]))
-		gradient_penalty = tf.reduce_mean((slopes-1.)**2)
-		disc_cost += LAMBDA*gradient_penalty
-
-	if ADAM == True:
-		gen_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_GEN, beta1=BETA1, beta2=BETA2).minimize(gen_cost, var_list=g_params)
-		disc_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_DIS, beta1=BETA1, beta2=BETA2).minimize(disc_cost, var_list=d_params)
-	else:
-		gen_train_op = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(gen_cost, var_list=g_params)
-		disc_train_op = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_cost, var_list=d_params)
-
+	
 	merge_no_img = tf.summary.merge([summary_real_conf, summary_fake_conf, summary_fake_hist,summary_true_hist, g_loss_sum, d_loss_sum])
 
-	if GP == False:
-		clipped_var_d = [tf.assign(var, tf.clip_by_value(var, C_LOWER, C_UPPER)) for var in d_params]
-        with tf.control_dependencies([disc_train_op]):
-        	if GP == False:
-           		disc_train_op = tf.tuple(clipped_var_d)
+	with tf.name_scope("train_op"):
+		g_params = tf.get_collection(
+		tf.GraphKeys.TRAINABLE_VARIABLES, scope="generator")
+		print "g_params: ", g_params
+		d_params = tf.get_collection(
+			tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator")
+		print "d_params: ", d_params
+		if ADAM == True:
+			gen_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_GEN, beta1=BETA1, beta2=BETA2).minimize(gen_cost, var_list=g_params)
+			disc_train_op = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE_DIS, beta1=BETA1, beta2=BETA2).minimize(disc_cost, var_list=d_params)
+		else:
+			gen_train_op = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(gen_cost, var_list=g_params)
+			disc_train_op = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_cost, var_list=d_params)
 
-	return gen_train_op, disc_train_op, gen_cost, reg_loss, disc_cost, d_real_conf, d_fake_conf, fimg, merge_no_img, fake_img_summary
+		d_clip = [tf.assign(var, tf.clip_by_value(var, C_LOWER, C_UPPER)) for var in d_params]
+
+	return gen_train_op, disc_train_op, gen_cost, reg_loss, disc_cost, d_real_conf, d_fake_conf, fimg, merge_no_img, fake_img_summary, d_clip
 
 # Train loop
 def main():
@@ -269,11 +265,11 @@ def main():
 		bsCoeff, ocp = load_bsCoeff_cp(bs_path)
 		bsCoeff = sample_skull_points(bsCoeff, SAMPLE_RATE)
 
-	weights = init_weights(filter_num_d, output_shape, Z_SIZE)
-	biases = init_biases(filter_num_d, output_shape)
+	init_weights(filter_num_d, output_shape, Z_SIZE)
+	init_biases(filter_num_d, output_shape)
 	#displacement field
 	cp_batch = load_data(record_path, n_epoch, BATCH_SIZE, tuple(SHAPE_SIZE), MODE)
-	gen_train_op, disc_train_op, g_loss, reg_loss, d_loss, real_conf, fake_conf, fimg, merge_no_img, fake_img_summary = build_graph(cp_batch)
+	gen_train_op, disc_train_op, g_loss, reg_loss, d_loss, real_conf, fake_conf, fimg, merge_no_img, fake_img_summary, d_clip = build_graph(cp_batch)
 	fake_cp = generator(BATCH_SIZE, output_shape, Z_SIZE, reuse=True, phase_train=False)
 	merged_all = tf.summary.merge_all()
 	rimg = tf.placeholder(tf.float32)
@@ -318,11 +314,14 @@ def main():
 				sess.run(gen_train_op)
 		   
 			if iteration < 50 or iteration % 500 == 0:
-				DISC_ITERS = 25
+				disc_iters = 25
+			else:
+				disc_iters = DISC_ITERS
 
-			for i in xrange(DISC_ITERS):
+			for i in xrange(disc_iters):
 				sess.run(disc_train_op)
-				
+				if GP == False:
+					sess.run(d_clip)
 
 			if iteration % PRINT == PRINT - 1:
 				print "step: %r of total step %r" % (iteration+1, ITERS)
@@ -342,7 +341,6 @@ def main():
 			if iteration % VIS_SHOW == VIS_SHOW-1:
 
 				fcp = sess.run(fake_cp)
-				print fcp.shape
 				fcp = np.reshape(fcp, (BATCH_SIZE,-1,3))
 				test_batch(fcp,'fcp')
 

@@ -30,20 +30,20 @@ def generator_tl(n_samples, output_shape, gen_filter_shape, Z_SIZE, is_training=
 		number_outputs = shape[1] * shape[2] * shape[3] * shape[4]
 		inputs = ly.InputLayer(noise, name='gen_input')
 		g1 = ly.DenseLayer(inputs, n_units=number_outputs, name='gen1_dense')
-		g1 = ly.BatchNormLayer(g1, name='gen1_bn', act=tf.nn.relu, is_train=is_training)
+		g1 = ly.BatchNormLayer(g1, name='gen1_bn', is_train=is_training, act=tf.nn.relu)
 		g1 = ly.ReshapeLayer(g1,shape=output_shape['g1'],name='gen1_reshape')
 
 		g2 = ly.DeConv3dLayer(g1,shape=gen_filter_shape['g2'], output_shape=output_shape['g2'] ,strides=strides_g,padding="SAME", name='gen2_deconv3d')
-		g2 = ly.BatchNormLayer(g2, name='gen2_bn', act=tf.nn.relu, is_train=is_training)
+		g2 = ly.BatchNormLayer(g2, name='gen2_bn', is_train=is_training, act=tf.nn.relu)
 
 		g3 = ly.DeConv3dLayer(g2,shape=gen_filter_shape['g3'], output_shape=output_shape['g3'] ,strides=strides_g,padding="SAME", name='gen3_deconv3d')
-		g3 = ly.BatchNormLayer(g3, name='gen3_bn', act=tf.nn.relu, is_train=is_training)
+		g3 = ly.BatchNormLayer(g3, name='gen3_bn', is_train=is_training, act=tf.nn.relu)
 
 		g4 = ly.DeConv3dLayer(g3,shape=gen_filter_shape['g4'], output_shape=output_shape['g4'] ,strides=strides_g,padding="SAME", name='gen4_deconv3d')
-		g4 = ly.BatchNormLayer(g4, name='gen4_bn', act=tf.nn.relu, is_train=is_training)
+		g4 = ly.BatchNormLayer(g4, name='gen4_bn', is_train=is_training)
 
 		train_params = g4.all_params
-		print "g_params: ",train_params
+		ly.print_all_variables(True)
 		g4.print_layers()
 		if TANH:
 			outputs = tf.tanh(g4.outputs)
@@ -76,7 +76,7 @@ def discriminator_tl(inputs, batch_size, dis_filter_shape, output_shape, is_trai
 		d4 = ly.DenseLayer(d3, n_units=1, name='dis4_dense', act= lambda x : tl.act.lrelu(x, 0.2))
 
 		train_params = d4.all_params
-		print "d_params: ",train_params
+		ly.print_all_variables(True)
 		d4.print_layers()
 		outputs = d4.outputs
 

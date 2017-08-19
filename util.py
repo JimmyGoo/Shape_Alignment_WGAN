@@ -57,7 +57,7 @@ def load_data(record_path, n_epoch, batch_size, shape_size, mode):
 		shape = read_and_decode_dis(filename_queue, shape_size)
 	else:
 		print 'invalid mode in load_data'
-	shape_batch = tf.train.batch([shape], batch_size=batch_size)
+	shape_batch = tf.train.shuffle_batch([shape], batch_size=batch_size, num_threads=4, capacity=50000, min_after_dequeue=10000)
 	return shape_batch
 
 

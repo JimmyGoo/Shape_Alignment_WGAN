@@ -8,7 +8,7 @@ from model_tl import *
 
 os.environ["CUDA_VISIBLE_DEVICES"]=argv[1]
 
-LEARNING_RATE_GEN = 1e-4
+LEARNING_RATE_GEN = 2e-4
 LEARNING_RATE_DIS = 1e-4
 #Adam 
 BETA1 = 0.5
@@ -142,8 +142,8 @@ MODE = current_config['MODE']
 GP = current_config['GP']
 RESUME = False
 REGULARIZE = current_config['REGULARIZE']
-REG_LAMDA = 10
-REG_LIMIT = 500
+REG_LAMDA = 1
+REG_LIMIT = 30
 
 filter_num_d = {
 	'1':3,

@@ -101,6 +101,7 @@ def build_graph(real_cp):
 
 	g_params = tf.get_collection(
 		tf.GraphKeys.TRAINABLE_VARIABLES, scope="generator")
+	print "d_p"
 	d_params = tf.get_collection(
 		tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator")
 
